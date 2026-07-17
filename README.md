@@ -8,8 +8,8 @@ Local-first tool to arrange **any images** on an **A4 canvas** and export a PDF 
 
 - Upload one or many images (file picker or drag-and-drop)
 - Drag to move, scroll to scale, Shift+scroll / ±90° / slider to rotate
-- One-click background removal (edge flood-fill, no AI) + auto crop
-- Stronger document mode (shadow flatten) and clarity enhance
+- **Smart document crop** (CamScanner-style): detect 4 corners → perspective warp → clean rectangle
+- Optional document mode (shadow flatten) and clarity enhance
 - Layer list: select, delete, duplicate, bring to front / send to back
 - Export single-page A4 PDF at 150 / 200 / 300 DPI
 - Privacy: images never leave your machine

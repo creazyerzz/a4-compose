@@ -75,7 +75,7 @@ function renderLayerList() {
     tctx.drawImage(it.img, (28 - dw) / 2, (28 - dh) / 2, dw, dh);
     const name = document.createElement("span");
     name.className = "name";
-    name.textContent = it.bgRemoved ? `${it.name} · 已去背景` : it.name;
+    name.textContent = it.bgRemoved ? `${it.name} · 已裁切` : it.name;
     name.title = name.textContent;
     li.append(thumb, name);
     li.addEventListener("click", () => {
@@ -186,7 +186,6 @@ document.getElementById("btnRemoveBg").addEventListener("click", () => {
   const btn = document.getElementById("btnRemoveBg");
   btn.disabled = true;
   btn.textContent = "处理中…";
-  // Turn off live filters first — cleanup is baked into the result
   document.getElementById("optDocMode").checked = false;
   document.getElementById("optEnhance").checked = false;
   syncOptions();
@@ -196,17 +195,15 @@ document.getElementById("btnRemoveBg").addEventListener("click", () => {
       if (!result.ok) {
         toast(result.message);
       } else {
-        const pct = result.meta?.contentRatio
-          ? `（保留主体 ${Math.round(result.meta.contentRatio * 100)}%）`
-          : "";
-        toast(`去背景完成${pct}`);
+        const m = result.meta?.method === "perspective" ? "已透视拉正" : "已裁切";
+        toast(`${m}（可再开证件模式增强）`);
       }
       syncChrome();
     } catch (err) {
       console.error(err);
-      toast("去背景失败");
+      toast("智能裁切失败");
     } finally {
-      btn.textContent = "一键去除背景";
+      btn.textContent = "智能裁切证件";
       syncChrome();
     }
   }, 40);
@@ -214,7 +211,7 @@ document.getElementById("btnRemoveBg").addEventListener("click", () => {
 
 document.getElementById("btnUndoBg").addEventListener("click", () => {
   if (stage.undoBackground()) {
-    toast("已恢复去背景前的图片");
+    toast("已恢复裁切前的图片");
     syncChrome();
   }
 });

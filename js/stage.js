@@ -284,14 +284,18 @@ export class A4Stage {
     }
 
     try {
-      const cleaned = removeBackground(it.img, { bakeCleanup: false });
+      const cleaned = removeBackground(it.img);
       const prevCx = it.x + it.w / 2;
       const prevCy = it.y + it.h / 2;
-      const scale = it.w / (it.img.naturalWidth || it.img.width || it.w);
+      // Fit scanned card onto canvas with sensible size
+      const maxW = this.pageW * 0.72;
+      const maxH = this.pageH * 0.4;
+      const fit = Math.min(maxW / cleaned.width, maxH / cleaned.height);
       it.img = cleaned;
       it.bgRemoved = true;
-      it.w = cleaned.width * scale;
-      it.h = cleaned.height * scale;
+      it.rotation = 0;
+      it.w = cleaned.width * fit;
+      it.h = cleaned.height * fit;
       it.x = prevCx - it.w / 2;
       it.y = prevCy - it.h / 2;
       this._processed.delete(it.id);
@@ -305,12 +309,12 @@ export class A4Stage {
     } catch (err) {
       return {
         ok: false,
-        message: err?.message || "去背景失败",
+        message: err?.message || "智能裁切失败",
       };
     }
   }
 
-  /** Restore image from before background removal. */
+  /** Restore image from before document scan. */
   undoBackground() {
     const it = this.selected;
     if (!it?._backup) return false;

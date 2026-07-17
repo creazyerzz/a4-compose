@@ -15,7 +15,7 @@
       <header class="header">
         <div class="brand">
           <h1>a4-compose</h1>
-          <p>任意图片 · A4 画布排版 · 本地增强 · 导出 PDF</p>
+      <p>任意图片 · A4 画布排版 · 智能裁切 · 导出 PDF</p>
         </div>
         <div class="header-actions">
           <button type="button" id="btnReset" class="btn ghost">重置</button>
@@ -41,12 +41,14 @@
         <section class="panel">
           <h2>图像处理</h2>
           <button type="button" id="btnRemoveBg" class="btn primary block" disabled>
-            一键去除背景
+            智能裁切证件
           </button>
           <button type="button" id="btnUndoBg" class="btn block" disabled>
-            撤销去背景
+            撤销裁切
           </button>
-          <p class="hint">去掉桌子、墙面等边缘背景，并自动裁切（失败会自动取消，不破坏原图）</p>
+          <p class="hint">
+            类似扫描王：识别证件四角 → 透视拉正 → 裁成整齐矩形（不啃坏内部图案）
+          </p>
           <label class="toggle">
             <input type="checkbox" id="optDocMode" />
             <span>证件 / 文档模式</span>
