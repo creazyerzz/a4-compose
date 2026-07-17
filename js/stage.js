@@ -1,4 +1,4 @@
-import { processImage } from "./enhance.js";
+import { processImage, removeBackground } from "./enhance.js";
 
 /** A4 size in millimeters */
 export const A4_MM = { w: 210, h: 297 };
@@ -12,7 +12,15 @@ export function mmToPx(mm, dpi = PREVIEW_DPI) {
 let nextId = 1;
 
 /**
- * @typedef {{ id: number, name: string, img: CanvasImageSource, objectUrl: string, x: number, y: number, w: number, h: number }} StageItem
+ * @typedef {{
+ *   id: number,
+ *   name: string,
+ *   img: CanvasImageSource,
+ *   objectUrl: string|null,
+ *   x: number, y: number, w: number, h: number,
+ *   rotation: number,
+ *   bgRemoved?: boolean
+ * }} StageItem
  */
 
 export class A4Stage {
@@ -29,11 +37,13 @@ export class A4Stage {
     /** @type {number|null} */
     this.selectedId = null;
     this.drag = null;
-    this.options = { enhance: false, docMode: false, strength: 60 };
+    this.options = { enhance: false, docMode: false, strength: 70 };
     /** @type {Map<number, HTMLCanvasElement>} */
     this._processed = new Map();
     this._optionsKey = "";
     this._raf = 0;
+    this._pulseUntil = 0;
+    this._anim = null;
 
     this._bind();
     this.requestRender();
@@ -65,7 +75,9 @@ export class A4Stage {
 
   getSelectionLabel() {
     const it = this.selected;
-    return it ? it.name : "未选中";
+    if (!it) return "未选中";
+    const rot = Math.round(it.rotation) % 360;
+    return rot ? `${it.name} · ${rot}°` : it.name;
   }
 
   /**
@@ -91,6 +103,8 @@ export class A4Stage {
         y: this.pageH * 0.12 + offset,
         w: fit.w,
         h: fit.h,
+        rotation: 0,
+        bgRemoved: false,
       };
       this.items.push(item);
       this.selectedId = item.id;
@@ -120,7 +134,7 @@ export class A4Stage {
     const idx = this.items.findIndex((it) => it.id === id);
     if (idx < 0) return false;
     const [removed] = this.items.splice(idx, 1);
-    URL.revokeObjectURL(removed.objectUrl);
+    if (removed.objectUrl) URL.revokeObjectURL(removed.objectUrl);
     this._processed.delete(id);
     this.selectedId = this.items[Math.min(idx, this.items.length - 1)]?.id ?? null;
     this.requestRender();
@@ -146,13 +160,17 @@ export class A4Stage {
     item.y = src.y + 20;
     item.w = src.w;
     item.h = src.h;
+    item.rotation = src.rotation;
+    item.bgRemoved = src.bgRemoved;
     this.requestRender();
     this.onChange?.();
     return item;
   }
 
   clear() {
-    for (const it of this.items) URL.revokeObjectURL(it.objectUrl);
+    for (const it of this.items) {
+      if (it.objectUrl) URL.revokeObjectURL(it.objectUrl);
+    }
     this.items = [];
     this.selectedId = null;
     this._invalidateProcessed();
@@ -168,23 +186,100 @@ export class A4Stage {
 
   bringToFront() {
     const it = this.selected;
-    if (!it) return;
+    if (!it) return false;
     this.items = this.items.filter((x) => x.id !== it.id);
     this.items.push(it);
+    this._flash(it);
     this.requestRender();
     this.onChange?.();
+    return true;
   }
 
   sendToBack() {
     const it = this.selected;
-    if (!it) return;
+    if (!it) return false;
     this.items = this.items.filter((x) => x.id !== it.id);
     this.items.unshift(it);
+    this._flash(it);
     this.requestRender();
     this.onChange?.();
+    return true;
   }
 
-  /** Stack images vertically with margins (good default for ID / docs). */
+  _flash(it) {
+    this._pulseUntil = performance.now() + 450;
+    this._pulseId = it.id;
+    const tick = () => {
+      this.requestRender();
+      if (performance.now() < this._pulseUntil) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+
+  /**
+   * Animate horizontal center for selected (or all if none selected).
+   */
+  centerHorizontally() {
+    const targets = this.selected ? [this.selected] : this.items;
+    if (!targets.length) return false;
+    const goals = targets.map((it) => ({
+      it,
+      fromX: it.x,
+      toX: (this.pageW - it.w) / 2,
+    }));
+    const needMove = goals.some((g) => Math.abs(g.toX - g.fromX) > 0.5);
+    this._animate(280, (t) => {
+      const e = easeOutCubic(t);
+      for (const g of goals) {
+        g.it.x = g.fromX + (g.toX - g.fromX) * e;
+      }
+    });
+    if (this.selected) this._flash(this.selected);
+    return needMove;
+  }
+
+  rotateSelected(deltaDeg) {
+    const it = this.selected;
+    if (!it) return false;
+    it.rotation = ((it.rotation + deltaDeg) % 360 + 360) % 360;
+    this.requestRender();
+    this.onChange?.();
+    return true;
+  }
+
+  setSelectedRotation(deg) {
+    const it = this.selected;
+    if (!it) return false;
+    it.rotation = ((deg % 360) + 360) % 360;
+    this.requestRender();
+    this.onChange?.();
+    return true;
+  }
+
+  /**
+   * One-click background removal on selected item (mutates source pixels).
+   */
+  removeSelectedBackground() {
+    const it = this.selected;
+    if (!it) return false;
+    const cleaned = removeBackground(it.img, { tolerance: 50 });
+    const prevCx = it.x + it.w / 2;
+    const prevCy = it.y + it.h / 2;
+    const scale = it.w / (it.img.naturalWidth || it.img.width || it.w);
+    it.img = cleaned;
+    it.bgRemoved = true;
+    it.w = cleaned.width * scale;
+    it.h = cleaned.height * scale;
+    it.x = prevCx - it.w / 2;
+    it.y = prevCy - it.h / 2;
+    this._processed.delete(it.id);
+    this._flash(it);
+    this.requestRender();
+    this.onChange?.();
+    return true;
+  }
+
+  /** Stack images vertically with margins. */
   autoLayout() {
     const n = this.items.length;
     if (!n) return;
@@ -196,6 +291,7 @@ export class A4Stage {
     const slotH = availH / n;
 
     for (const it of this.items) {
+      it.rotation = 0;
       const nw = it.img.naturalWidth || it.img.width;
       const nh = it.img.naturalHeight || it.img.height;
       const fit = fitInside(nw, nh, maxW, slotH);
@@ -203,28 +299,62 @@ export class A4Stage {
       it.h = fit.h;
     }
 
+    const goals = [];
     let y = marginY;
     for (const it of this.items) {
-      it.x = (this.pageW - it.w) / 2;
-      it.y = y + (slotH - it.h) / 2;
+      goals.push({
+        it,
+        fromX: it.x,
+        fromY: it.y,
+        toX: (this.pageW - it.w) / 2,
+        toY: y + (slotH - it.h) / 2,
+      });
       y += slotH + gap;
     }
-    this.requestRender();
+    this._animate(320, (t) => {
+      const e = easeOutCubic(t);
+      for (const g of goals) {
+        g.it.x = g.fromX + (g.toX - g.fromX) * e;
+        g.it.y = g.fromY + (g.toY - g.fromY) * e;
+      }
+    });
   }
 
-  centerHorizontally() {
-    for (const it of this.items) {
-      it.x = (this.pageW - it.w) / 2;
-    }
-    this.requestRender();
+  _animate(ms, fn) {
+    if (this._anim) cancelAnimationFrame(this._anim.raf);
+    const t0 = performance.now();
+    const step = (now) => {
+      const t = Math.min(1, (now - t0) / ms);
+      fn(t);
+      this.requestRender();
+      if (t < 1) {
+        this._anim = { raf: requestAnimationFrame(step) };
+      } else {
+        this._anim = null;
+      }
+    };
+    this._anim = { raf: requestAnimationFrame(step) };
+  }
+
+  _localPoint(it, x, y) {
+    const cx = it.x + it.w / 2;
+    const cy = it.y + it.h / 2;
+    const rad = (-it.rotation * Math.PI) / 180;
+    const dx = x - cx;
+    const dy = y - cy;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    return {
+      x: dx * cos - dy * sin + it.w / 2,
+      y: dx * sin + dy * cos + it.h / 2,
+    };
   }
 
   _hitTest(x, y) {
     for (let i = this.items.length - 1; i >= 0; i--) {
       const it = this.items[i];
-      if (x >= it.x && x <= it.x + it.w && y >= it.y && y <= it.y + it.h) {
-        return it;
-      }
+      const lp = this._localPoint(it, x, y);
+      if (lp.x >= 0 && lp.x <= it.w && lp.y >= 0 && lp.y <= it.h) return it;
     }
     return null;
   }
@@ -283,6 +413,12 @@ export class A4Stage {
     const it = this.selected;
     if (!it) return;
     e.preventDefault();
+    if (e.shiftKey) {
+      it.rotation = ((it.rotation + (e.deltaY < 0 ? -3 : 3)) % 360 + 360) % 360;
+      this.onChange?.();
+      this.requestRender();
+      return;
+    }
     const factor = e.deltaY < 0 ? 1.06 : 1 / 1.06;
     const nw = it.w * factor;
     const nh = it.h * factor;
@@ -321,6 +457,36 @@ export class A4Stage {
     });
   }
 
+  _drawItem(ctx, it, src) {
+    const cx = it.x + it.w / 2;
+    const cy = it.y + it.h / 2;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate((it.rotation * Math.PI) / 180);
+    ctx.drawImage(src, -it.w / 2, -it.h / 2, it.w, it.h);
+
+    const pulsing =
+      it.id === this._pulseId && performance.now() < this._pulseUntil;
+    if (it.id === this.selectedId || pulsing) {
+      ctx.strokeStyle = pulsing ? "#e11d48" : "#0b6e4f";
+      ctx.lineWidth = pulsing ? 3 : 2;
+      ctx.strokeRect(-it.w / 2 - 1, -it.h / 2 - 1, it.w + 2, it.h + 2);
+      // rotation handle hint
+      if (it.id === this.selectedId) {
+        ctx.fillStyle = "#0b6e4f";
+        ctx.beginPath();
+        ctx.arc(0, -it.h / 2 - 14, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "#0b6e4f";
+        ctx.beginPath();
+        ctx.moveTo(0, -it.h / 2);
+        ctx.lineTo(0, -it.h / 2 - 10);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
   render() {
     const { ctx, pageW, pageH } = this;
     ctx.clearRect(0, 0, pageW, pageH);
@@ -338,20 +504,13 @@ export class A4Stage {
       ctx.font = "15px sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText("添加图片后，可在此 A4 画布中拖动排版", pageW / 2, pageH / 2);
+      ctx.fillText("添加图片后，可在此 A4 画布中拖动 / 旋转排版", pageW / 2, pageH / 2);
       return;
     }
 
     for (const it of this.items) {
       const src = this._ensureProcessed(it);
-      ctx.drawImage(src, it.x, it.y, it.w, it.h);
-      if (it.id === this.selectedId) {
-        ctx.save();
-        ctx.strokeStyle = "#0b6e4f";
-        ctx.lineWidth = 2;
-        ctx.strokeRect(it.x - 1, it.y - 1, it.w + 2, it.h + 2);
-        ctx.restore();
-      }
+      this._drawItem(ctx, it, src);
     }
   }
 
@@ -370,10 +529,20 @@ export class A4Stage {
 
     for (const it of this.items) {
       const src = this._ensureProcessed(it);
-      ctx.drawImage(src, it.x * scale, it.y * scale, it.w * scale, it.h * scale);
+      const cx = (it.x + it.w / 2) * scale;
+      const cy = (it.y + it.h / 2) * scale;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate((it.rotation * Math.PI) / 180);
+      ctx.drawImage(src, (-it.w / 2) * scale, (-it.h / 2) * scale, it.w * scale, it.h * scale);
+      ctx.restore();
     }
     return out;
   }
+}
+
+function easeOutCubic(t) {
+  return 1 - Math.pow(1 - t, 3);
 }
 
 function fitInside(srcW, srcH, maxW, maxH) {

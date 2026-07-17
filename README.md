@@ -7,9 +7,10 @@ Local-first tool to arrange **any images** on an **A4 canvas** and export a PDF 
 ## Features
 
 - Upload one or many images (file picker or drag-and-drop)
-- Drag to move, scroll wheel to scale on the A4 page canvas
+- Drag to move, scroll to scale, Shift+scroll / ±90° / slider to rotate
+- One-click background removal (edge flood-fill, no AI) + auto crop
+- Stronger document mode (shadow flatten) and clarity enhance
 - Layer list: select, delete, duplicate, bring to front / send to back
-- Optional clarity enhance + document mode (Canvas algorithms, no AI / no cloud)
 - Export single-page A4 PDF at 150 / 200 / 300 DPI
 - Privacy: images never leave your machine
 
@@ -37,7 +38,7 @@ MIT — see [LICENSE](LICENSE).
 
 ## 中文
 
-把任意图片放到 A4 画布上拖动排版，可选清晰度增强 / 证件文档模式，导出 PDF。纯前端本地处理，不上传服务器。
+把任意图片放到 A4 画布上拖动 / 旋转排版，支持一键去背景、去阴影与清晰增强，导出 PDF。纯前端本地处理，不上传服务器。
 
 ```bash
 python3 -m http.server 5173

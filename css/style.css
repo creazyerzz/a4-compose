@@ -250,6 +250,11 @@ select {
   background: transparent;
 }
 
+.btn.block {
+  width: 100%;
+  margin-bottom: 8px;
+}
+
 .privacy p {
   margin: 0;
   color: var(--muted);

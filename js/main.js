@@ -6,7 +6,9 @@ const toastEl = document.getElementById("toast");
 const layerList = document.getElementById("layerList");
 const fileInput = document.getElementById("fileImages");
 const uploadLabel = fileInput.closest(".upload");
+const rotSlider = document.getElementById("optRotation");
 let toastTimer = 0;
+let syncingRot = false;
 
 function toast(msg) {
   toastEl.hidden = false;
@@ -14,7 +16,7 @@ function toast(msg) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => {
     toastEl.hidden = true;
-  }, 2200);
+  }, 2400);
 }
 
 function syncOptions() {
@@ -32,16 +34,27 @@ function syncChrome() {
   const hasSel = !!stage.selected;
   document.getElementById("selectionLabel").textContent = stage.getSelectionLabel();
   document.getElementById("itemCount").textContent = `${stage.items.length} 张图片`;
-  document.getElementById("btnDelete").disabled = !hasSel;
-  document.getElementById("btnDuplicate").disabled = !hasSel;
-  document.getElementById("btnBringFront").disabled = !hasSel;
-  document.getElementById("btnSendBack").disabled = !hasSel;
+  for (const id of [
+    "btnDelete",
+    "btnDuplicate",
+    "btnBringFront",
+    "btnSendBack",
+    "btnRemoveBg",
+    "btnRotateL",
+    "btnRotateR",
+  ]) {
+    document.getElementById(id).disabled = !hasSel;
+  }
+  rotSlider.disabled = !hasSel;
+  syncingRot = true;
+  rotSlider.value = String(Math.round(stage.selected?.rotation || 0) % 360);
+  document.getElementById("rotVal").textContent = rotSlider.value;
+  syncingRot = false;
   renderLayerList();
 }
 
 function renderLayerList() {
   layerList.innerHTML = "";
-  // Show top layer first in the list
   const ordered = [...stage.items].reverse();
   for (const it of ordered) {
     const li = document.createElement("li");
@@ -56,11 +69,13 @@ function renderLayerList() {
     const s = Math.max(28 / iw, 28 / ih);
     const dw = iw * s;
     const dh = ih * s;
+    tctx.fillStyle = "#fff";
+    tctx.fillRect(0, 0, 28, 28);
     tctx.drawImage(it.img, (28 - dw) / 2, (28 - dh) / 2, dw, dh);
     const name = document.createElement("span");
     name.className = "name";
-    name.textContent = it.name;
-    name.title = it.name;
+    name.textContent = it.bgRemoved ? `${it.name} · 已去背景` : it.name;
+    name.title = name.textContent;
     li.append(thumb, name);
     li.addEventListener("click", () => {
       stage.select(it.id);
@@ -109,23 +124,84 @@ for (const id of ["optEnhance", "optDocMode", "optStrength"]) {
 }
 
 document.getElementById("btnFit").addEventListener("click", () => {
+  if (!stage.items.length) {
+    toast("请先添加图片");
+    return;
+  }
   stage.autoLayout();
   toast("已自动排版");
+  syncChrome();
 });
 
 document.getElementById("btnCenter").addEventListener("click", () => {
-  stage.centerHorizontally();
-  toast("已水平居中");
+  if (!stage.items.length) {
+    toast("请先添加图片");
+    return;
+  }
+  const moved = stage.centerHorizontally();
+  toast(moved ? "已水平居中" : "已经在水平居中位置");
+  syncChrome();
 });
 
 document.getElementById("btnBringFront").addEventListener("click", () => {
-  stage.bringToFront();
-  syncChrome();
+  if (stage.bringToFront()) {
+    toast("已图层置顶（列表最上）");
+    syncChrome();
+  }
 });
 
 document.getElementById("btnSendBack").addEventListener("click", () => {
-  stage.sendToBack();
+  if (stage.sendToBack()) {
+    toast("已图层置底（列表最下，重叠时才看得出）");
+    syncChrome();
+  }
+});
+
+document.getElementById("btnRotateL").addEventListener("click", () => {
+  stage.rotateSelected(-90);
+  toast("已旋转 -90°");
   syncChrome();
+});
+
+document.getElementById("btnRotateR").addEventListener("click", () => {
+  stage.rotateSelected(90);
+  toast("已旋转 +90°");
+  syncChrome();
+});
+
+rotSlider.addEventListener("input", () => {
+  if (syncingRot) return;
+  const deg = Number(rotSlider.value);
+  document.getElementById("rotVal").textContent = String(deg);
+  stage.setSelectedRotation(deg);
+  document.getElementById("selectionLabel").textContent = stage.getSelectionLabel();
+});
+
+document.getElementById("btnRemoveBg").addEventListener("click", () => {
+  if (!stage.selected) {
+    toast("请先选中一张图片");
+    return;
+  }
+  const btn = document.getElementById("btnRemoveBg");
+  btn.disabled = true;
+  btn.textContent = "处理中…";
+  // Yield to UI then process (can be heavy)
+  setTimeout(() => {
+    try {
+      stage.removeSelectedBackground();
+      document.getElementById("optDocMode").checked = true;
+      document.getElementById("optEnhance").checked = true;
+      syncOptions();
+      toast("已去背景；已自动开启文档模式 + 清晰增强");
+      syncChrome();
+    } catch (err) {
+      console.error(err);
+      toast("去背景失败");
+    } finally {
+      btn.textContent = "一键去除背景";
+      syncChrome();
+    }
+  }, 40);
 });
 
 document.getElementById("btnDelete").addEventListener("click", () => {
@@ -144,7 +220,7 @@ document.getElementById("btnDuplicate").addEventListener("click", async () => {
 document.getElementById("btnReset").addEventListener("click", () => {
   document.getElementById("optEnhance").checked = false;
   document.getElementById("optDocMode").checked = false;
-  document.getElementById("optStrength").value = "60";
+  document.getElementById("optStrength").value = "70";
   stage.clear();
   syncOptions();
   syncChrome();
@@ -152,14 +228,22 @@ document.getElementById("btnReset").addEventListener("click", () => {
 });
 
 document.addEventListener("keydown", (e) => {
+  const tag = document.activeElement?.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
   if (e.key === "Delete" || e.key === "Backspace") {
-    const tag = document.activeElement?.tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
     if (stage.removeSelected()) {
       e.preventDefault();
       toast("已删除");
       syncChrome();
     }
+  }
+  if (e.key === "[" && stage.selected) {
+    stage.rotateSelected(-90);
+    syncChrome();
+  }
+  if (e.key === "]" && stage.selected) {
+    stage.rotateSelected(90);
+    syncChrome();
   }
 });
 

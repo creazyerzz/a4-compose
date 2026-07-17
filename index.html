@@ -40,33 +40,46 @@
 
         <section class="panel">
           <h2>图像处理</h2>
-          <label class="toggle">
-            <input type="checkbox" id="optEnhance" />
-            <span>清晰度增强</span>
-          </label>
-          <p class="hint">锐化 + 对比度拉伸，让文字更清楚</p>
+          <button type="button" id="btnRemoveBg" class="btn primary block" disabled>
+            一键去除背景
+          </button>
+          <p class="hint">去掉桌子、墙面等边缘背景，并自动裁切（选中图片后点击）</p>
           <label class="toggle">
             <input type="checkbox" id="optDocMode" />
             <span>证件 / 文档模式</span>
           </label>
-          <p class="hint">压白底、弱化阴影，接近扫描件效果</p>
+          <p class="hint">去阴影、压白底；建议去背景后开启</p>
+          <label class="toggle">
+            <input type="checkbox" id="optEnhance" />
+            <span>清晰度增强</span>
+          </label>
+          <p class="hint">锐化 + 中对比度，让文字更清楚</p>
           <label class="slider">
-            <span>增强强度 <b id="strengthVal">60</b>%</span>
-            <input type="range" id="optStrength" min="0" max="100" value="60" />
+            <span>处理强度 <b id="strengthVal">70</b>%</span>
+            <input type="range" id="optStrength" min="0" max="100" value="70" />
           </label>
         </section>
 
         <section class="panel">
           <h2>画布操作</h2>
-          <p class="hint">拖动调整位置；滚轮缩放选中项；点击图层列表切换选中</p>
+          <p class="hint">拖动移动；滚轮缩放；Shift+滚轮旋转</p>
           <div class="btn-row">
+            <button type="button" id="btnRotateL" class="btn" disabled>旋转 -90°</button>
+            <button type="button" id="btnRotateR" class="btn" disabled>旋转 +90°</button>
+          </div>
+          <label class="slider">
+            <span>自由旋转 <b id="rotVal">0</b>°</span>
+            <input type="range" id="optRotation" min="0" max="359" value="0" disabled />
+          </label>
+          <div class="btn-row" style="margin-top: 8px">
             <button type="button" id="btnFit" class="btn">自动排版</button>
             <button type="button" id="btnCenter" class="btn">水平居中</button>
           </div>
           <div class="btn-row" style="margin-top: 8px">
-            <button type="button" id="btnBringFront" class="btn" disabled>置于顶层</button>
-            <button type="button" id="btnSendBack" class="btn" disabled>置于底层</button>
+            <button type="button" id="btnBringFront" class="btn" disabled>图层置顶</button>
+            <button type="button" id="btnSendBack" class="btn" disabled>图层置底</button>
           </div>
+          <p class="hint">置顶/置底只改叠放顺序（重叠时才明显），左侧列表会同步</p>
           <label class="slider">
             <span>导出清晰度</span>
             <select id="optDpi">
