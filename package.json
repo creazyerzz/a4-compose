@@ -1,0 +1,23 @@
+{
+  "name": "a4-compose",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Arrange any images on an A4 canvas and export PDF locally in the browser.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/creazyerzz/a4-compose.git"
+  },
+  "keywords": [
+    "a4",
+    "pdf",
+    "canvas",
+    "image-layout",
+    "local-first",
+    "privacy"
+  ],
+  "scripts": {
+    "start": "python3 -m http.server 5173",
+    "serve": "python3 -m http.server 5173"
+  }
+}

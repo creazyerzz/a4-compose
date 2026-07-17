@@ -3,6 +3,9 @@ import { jpegToA4Pdf } from "./pdf.js";
 
 const stage = new A4Stage(document.getElementById("stage"));
 const toastEl = document.getElementById("toast");
+const layerList = document.getElementById("layerList");
+const fileInput = document.getElementById("fileImages");
+const uploadLabel = fileInput.closest(".upload");
 let toastTimer = 0;
 
 function toast(msg) {
@@ -25,33 +28,79 @@ function syncOptions() {
   );
 }
 
-stage.onSelectionChange = () => {
+function syncChrome() {
+  const hasSel = !!stage.selected;
   document.getElementById("selectionLabel").textContent = stage.getSelectionLabel();
-};
+  document.getElementById("itemCount").textContent = `${stage.items.length} 张图片`;
+  document.getElementById("btnDelete").disabled = !hasSel;
+  document.getElementById("btnDuplicate").disabled = !hasSel;
+  document.getElementById("btnBringFront").disabled = !hasSel;
+  document.getElementById("btnSendBack").disabled = !hasSel;
+  renderLayerList();
+}
 
-async function onFile(side, input, nameEl) {
-  const file = input.files?.[0];
-  if (!file) return;
-  if (!file.type.startsWith("image/")) {
-    toast("请选择图片文件");
-    input.value = "";
-    return;
+function renderLayerList() {
+  layerList.innerHTML = "";
+  // Show top layer first in the list
+  const ordered = [...stage.items].reverse();
+  for (const it of ordered) {
+    const li = document.createElement("li");
+    if (it.id === stage.selectedId) li.classList.add("active");
+    const thumb = document.createElement("canvas");
+    thumb.className = "thumb";
+    thumb.width = 28;
+    thumb.height = 28;
+    const tctx = thumb.getContext("2d");
+    const iw = it.img.naturalWidth || it.img.width;
+    const ih = it.img.naturalHeight || it.img.height;
+    const s = Math.max(28 / iw, 28 / ih);
+    const dw = iw * s;
+    const dh = ih * s;
+    tctx.drawImage(it.img, (28 - dw) / 2, (28 - dh) / 2, dw, dh);
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = it.name;
+    name.title = it.name;
+    li.append(thumb, name);
+    li.addEventListener("click", () => {
+      stage.select(it.id);
+    });
+    layerList.appendChild(li);
   }
+}
+
+stage.onChange = syncChrome;
+
+async function addFiles(fileList) {
   try {
-    const name = await stage.setImage(side, file);
-    nameEl.textContent = name;
-    document.getElementById("selectionLabel").textContent = stage.getSelectionLabel();
-    toast(side === "front" ? "正面已加载" : "反面已加载");
+    const n = await stage.addImages(fileList);
+    if (!n) {
+      toast("请选择图片文件");
+      return;
+    }
+    toast(`已添加 ${n} 张图片`);
+    syncChrome();
   } catch {
     toast("图片读取失败");
   }
 }
 
-document.getElementById("fileFront").addEventListener("change", (e) => {
-  onFile("front", e.target, document.getElementById("nameFront"));
+fileInput.addEventListener("change", async (e) => {
+  await addFiles(e.target.files);
+  e.target.value = "";
 });
-document.getElementById("fileBack").addEventListener("change", (e) => {
-  onFile("back", e.target, document.getElementById("nameBack"));
+
+uploadLabel.addEventListener("dragover", (e) => {
+  e.preventDefault();
+  uploadLabel.classList.add("dragover");
+});
+uploadLabel.addEventListener("dragleave", () => {
+  uploadLabel.classList.remove("dragover");
+});
+uploadLabel.addEventListener("drop", async (e) => {
+  e.preventDefault();
+  uploadLabel.classList.remove("dragover");
+  await addFiles(e.dataTransfer.files);
 });
 
 for (const id of ["optEnhance", "optDocMode", "optStrength"]) {
@@ -60,8 +109,8 @@ for (const id of ["optEnhance", "optDocMode", "optStrength"]) {
 }
 
 document.getElementById("btnFit").addEventListener("click", () => {
-  stage.resetLayout();
-  toast("已恢复默认排版");
+  stage.autoLayout();
+  toast("已自动排版");
 });
 
 document.getElementById("btnCenter").addEventListener("click", () => {
@@ -69,29 +118,54 @@ document.getElementById("btnCenter").addEventListener("click", () => {
   toast("已水平居中");
 });
 
+document.getElementById("btnBringFront").addEventListener("click", () => {
+  stage.bringToFront();
+  syncChrome();
+});
+
+document.getElementById("btnSendBack").addEventListener("click", () => {
+  stage.sendToBack();
+  syncChrome();
+});
+
+document.getElementById("btnDelete").addEventListener("click", () => {
+  if (stage.removeSelected()) {
+    toast("已删除");
+    syncChrome();
+  }
+});
+
+document.getElementById("btnDuplicate").addEventListener("click", async () => {
+  await stage.duplicateSelected();
+  toast("已复制");
+  syncChrome();
+});
+
 document.getElementById("btnReset").addEventListener("click", () => {
-  document.getElementById("fileFront").value = "";
-  document.getElementById("fileBack").value = "";
-  document.getElementById("nameFront").textContent = "未选择";
-  document.getElementById("nameBack").textContent = "未选择";
   document.getElementById("optEnhance").checked = false;
   document.getElementById("optDocMode").checked = false;
   document.getElementById("optStrength").value = "60";
-  if (stage.items.front?.objectUrl) URL.revokeObjectURL(stage.items.front.objectUrl);
-  if (stage.items.back?.objectUrl) URL.revokeObjectURL(stage.items.back.objectUrl);
-  stage.items.front = null;
-  stage.items.back = null;
-  stage.selected = null;
-  stage._cache = { front: null, back: null, key: "" };
-  stage.resetLayout();
+  stage.clear();
   syncOptions();
-  document.getElementById("selectionLabel").textContent = "未选中";
+  syncChrome();
   toast("已重置");
 });
 
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Delete" || e.key === "Backspace") {
+    const tag = document.activeElement?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+    if (stage.removeSelected()) {
+      e.preventDefault();
+      toast("已删除");
+      syncChrome();
+    }
+  }
+});
+
 document.getElementById("btnExport").addEventListener("click", async () => {
-  if (!stage.items.front && !stage.items.back) {
-    toast("请先上传身份证图片");
+  if (!stage.items.length) {
+    toast("请先添加图片");
     return;
   }
   const dpi = Number(document.getElementById("optDpi").value) || 200;
@@ -112,7 +186,7 @@ document.getElementById("btnExport").addEventListener("click", async () => {
     const a = document.createElement("a");
     const url = URL.createObjectURL(pdf);
     a.href = url;
-    a.download = `身份证_A4_${dpi}dpi.pdf`;
+    a.download = `a4-compose_${dpi}dpi.pdf`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 2000);
     toast("PDF 已下载");
@@ -126,3 +200,4 @@ document.getElementById("btnExport").addEventListener("click", async () => {
 });
 
 syncOptions();
+syncChrome();

@@ -7,7 +7,6 @@
   --line: #d5dee8;
   --accent: #0b6e4f;
   --accent-soft: #d8f3e7;
-  --danger: #b42318;
   --shadow: 0 10px 30px rgba(26, 35, 50, 0.08);
   --font: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Segoe UI", sans-serif;
 }
@@ -57,6 +56,7 @@ select {
   margin: 0;
   font-size: 22px;
   letter-spacing: 0.02em;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
 .brand p {
@@ -94,18 +94,18 @@ select {
 
 .upload {
   display: grid;
-  grid-template-columns: 52px 1fr;
-  gap: 4px 10px;
-  align-items: center;
-  padding: 10px;
-  margin-bottom: 8px;
+  gap: 4px;
+  padding: 14px;
+  margin-bottom: 10px;
   border: 1px dashed var(--line);
   border-radius: 10px;
   cursor: pointer;
   background: #fbfcfe;
+  text-align: center;
 }
 
-.upload:hover {
+.upload:hover,
+.upload.dragover {
   border-color: var(--accent);
   background: var(--accent-soft);
 }
@@ -116,17 +116,71 @@ select {
 }
 
 .upload em {
-  grid-column: 2;
   font-style: normal;
   color: var(--muted);
   font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .upload input {
   display: none;
+}
+
+.layer-list {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fbfcfe;
+}
+
+.layer-list:empty::after {
+  content: "尚未添加图片";
+  display: block;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.layer-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.layer-list li:last-child {
+  border-bottom: none;
+}
+
+.layer-list li:hover {
+  background: #f0f5f8;
+}
+
+.layer-list li.active {
+  background: var(--accent-soft);
+}
+
+.layer-list .thumb {
+  width: 28px;
+  height: 28px;
+  object-fit: cover;
+  border-radius: 4px;
+  background: #e2e8f0;
+  flex-shrink: 0;
+}
+
+.layer-list .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .toggle {
@@ -173,8 +227,13 @@ select {
   transition: 0.15s ease;
 }
 
-.btn:hover {
+.btn:hover:not(:disabled) {
   border-color: #9bb0c2;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .btn.primary {
@@ -183,7 +242,7 @@ select {
   color: #fff;
 }
 
-.btn.primary:hover {
+.btn.primary:hover:not(:disabled) {
   filter: brightness(1.05);
 }
 

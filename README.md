@@ -1,40 +1,45 @@
-# 身份证 A4 排版
+# a4-compose
 
-本地网页工具：上传身份证正反面图片，在 A4 画布上拖动排版，可选清晰度增强 / 证件模式，导出 PDF。
+Local-first tool to arrange **any images** on an **A4 canvas** and export a PDF — entirely in the browser.
 
-## 特点
+[中文说明](#中文)
 
-- **纯前端**：图片只在浏览器内处理，不上传服务器
-- **画布拖动**：拖动调整位置，滚轮缩放选中证件
-- **清晰度增强**：锐化 + 对比度拉伸（无 AI / 无大模型）
-- **证件模式**：压白底、弱化阴影，接近扫描件观感
-- **导出 PDF**：A4 单页，支持 150 / 200 / 300 DPI
+## Features
 
-## 使用
+- Upload one or many images (file picker or drag-and-drop)
+- Drag to move, scroll wheel to scale on the A4 page canvas
+- Layer list: select, delete, duplicate, bring to front / send to back
+- Optional clarity enhance + document mode (Canvas algorithms, no AI / no cloud)
+- Export single-page A4 PDF at 150 / 200 / 300 DPI
+- Privacy: images never leave your machine
 
-因使用 ES Module，需通过本地静态服务器打开（直接双击 `file://` 可能被浏览器拦截模块加载）：
+## Quick start
+
+ES modules require a local static server (opening `file://` may be blocked):
 
 ```bash
-# Python
 python3 -m http.server 5173
-
-# 或 Node
-npx --yes serve -p 5173
 ```
 
-浏览器访问：`http://127.0.0.1:5173`
+Open `http://127.0.0.1:5173`
 
-1. 分别上传正面、反面图片  
-2. 在画布上拖动 / 滚轮缩放  
-3. 按需勾选「清晰度增强」「证件模式」  
-4. 点击「导出 PDF」
+## Stack
 
-## 隐私
+- Static HTML / CSS / JS (no build step, no backend)
+- Image processing via Canvas 2D
+- Minimal JPEG-in-PDF writer
 
-不采集、不上传任何证件图片或个人信息。所有处理均在本机完成。
+## License
 
-## 技术说明
+MIT — see [LICENSE](LICENSE).
 
-- 静态 HTML / CSS / JS（无构建步骤、无后端）
-- 图像处理：Canvas 2D 像素算法
-- PDF：自研最小 JPEG 嵌入写入器
+---
+
+## 中文
+
+把任意图片放到 A4 画布上拖动排版，可选清晰度增强 / 证件文档模式，导出 PDF。纯前端本地处理，不上传服务器。
+
+```bash
+python3 -m http.server 5173
+# 浏览器打开 http://127.0.0.1:5173
+```
