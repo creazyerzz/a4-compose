@@ -289,6 +289,16 @@ function orderCorners(pts) {
   return [tl, tr, br, bl];
 }
 
+/** Pull corners toward center to drop desk fringe. */
+function shrinkQuad(quad, t) {
+  const cx = (quad[0].x + quad[1].x + quad[2].x + quad[3].x) / 4;
+  const cy = (quad[0].y + quad[1].y + quad[2].y + quad[3].y) / 4;
+  return quad.map((p) => ({
+    x: cx + (p.x - cx) * (1 - t),
+    y: cy + (p.y - cy) * (1 - t),
+  }));
+}
+
 function scoreQuad(quad, imgArea) {
   const area = polygonArea(quad);
   if (area < imgArea * 0.08 || area > imgArea * 0.95) return -1;
@@ -508,13 +518,14 @@ function pickExtremeCorners(pts) {
   return [tl, tr, br, bl];
 }
 
-/** Build subject mask and approximate its outer contour to a quad. */
+/** Build subject mask and fit min-area rectangle (tight CamScanner-like crop). */
 function detectQuadFromBlob(data, w, h) {
   const border = Math.max(3, Math.round(Math.min(w, h) * 0.05));
   let br = 0;
   let bg = 0;
   let bb = 0;
   let bn = 0;
+  let satSum = 0;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       if (x >= border && y >= border && x < w - border && y < h - border) continue;
@@ -522,49 +533,131 @@ function detectQuadFromBlob(data, w, h) {
       br += data[i];
       bg += data[i + 1];
       bb += data[i + 2];
+      const mx = Math.max(data[i], data[i + 1], data[i + 2]);
+      const mn = Math.min(data[i], data[i + 1], data[i + 2]);
+      satSum += mx === 0 ? 0 : (mx - mn) / mx;
       bn++;
     }
   }
   br /= bn;
   bg /= bn;
   bb /= bn;
+  const bgSat = satSum / bn;
 
   const fg = new Uint8Array(w * h);
-  const insetX = Math.round(w * 0.18);
-  const insetY = Math.round(h * 0.18);
+  const insetX = Math.round(w * 0.2);
+  const insetY = Math.round(h * 0.2);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const i = (y * w + x) * 4;
-      const d = Math.hypot(data[i] - br, data[i + 1] - bg, data[i + 2] - bb);
-      if (x >= insetX && x < w - insetX && y >= insetY && y < h - insetY) {
-        fg[y * w + x] = 1;
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      const d = Math.hypot(r - br, g - bg, b - bb);
+      const mx = Math.max(r, g, b);
+      const mn = Math.min(r, g, b);
+      const sat = mx === 0 ? 0 : (mx - mn) / mx;
+      const inCore = x >= insetX && x < w - insetX && y >= insetY && y < h - insetY;
+      const looksLikeDesk = d < 36 && Math.abs(sat - bgSat) < 0.12;
+      if (inCore) {
+        fg[y * w + x] = looksLikeDesk && d < 22 ? 0 : 1;
       } else {
-        // Prefer keeping uncertain pixels as subject (bias)
-        fg[y * w + x] = d > 32 ? 1 : 0;
+        fg[y * w + x] = looksLikeDesk ? 0 : d > 40 ? 1 : 0;
       }
     }
   }
 
-  // Morphological close (dilate then erode) to smooth card silhouette
-  let m = dilate(fg, w, h, 2);
+  let m = dilate(fg, w, h, 1);
   m = erode(m, w, h, 2);
 
-  // Trace outer boundary of largest center-touching component
   const contour = traceBlobContour(m, w, h, insetX, insetY);
   if (!contour || contour.length < 40) return null;
 
-  const peri = perimeter(contour);
-  for (const factor of [0.02, 0.03, 0.04, 0.06]) {
-    let pts = approxPolyDP(contour.concat([contour[0]]), peri * factor);
-    if (pts.length >= 2) {
-      const a = pts[0];
-      const b = pts[pts.length - 1];
-      if (Math.hypot(a.x - b.x, a.y - b.y) < 3) pts = pts.slice(0, -1);
+  const hull = convexHull(contour);
+  if (hull.length < 4) return null;
+  return minAreaRectCorners(hull);
+}
+
+/** Andrew's monotone chain convex hull. */
+function convexHull(points) {
+  const pts = points
+    .map((p) => ({ x: p.x, y: p.y }))
+    .sort((a, b) => (a.x === b.x ? a.y - b.y : a.x - b.x));
+  const uniq = [];
+  for (const p of pts) {
+    if (!uniq.length || uniq[uniq.length - 1].x !== p.x || uniq[uniq.length - 1].y !== p.y) {
+      uniq.push(p);
     }
-    if (pts.length === 4) return pts;
-    if (pts.length > 4 && pts.length <= 10) return pickExtremeCorners(pts);
   }
-  return pickExtremeCorners(contour);
+  if (uniq.length <= 2) return uniq;
+
+  const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const lower = [];
+  for (const p of uniq) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) {
+      lower.pop();
+    }
+    lower.push(p);
+  }
+  const upper = [];
+  for (let i = uniq.length - 1; i >= 0; i--) {
+    const p = uniq[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) {
+      upper.pop();
+    }
+    upper.push(p);
+  }
+  lower.pop();
+  upper.pop();
+  return lower.concat(upper);
+}
+
+/** Rotating-calipers min-area rect → 4 corners. */
+function minAreaRectCorners(hull) {
+  let bestArea = Infinity;
+  let best = null;
+  const n = hull.length;
+  for (let i = 0; i < n; i++) {
+    const a = hull[i];
+    const b = hull[(i + 1) % n];
+    const edgeDx = b.x - a.x;
+    const edgeDy = b.y - a.y;
+    const len = Math.hypot(edgeDx, edgeDy) || 1;
+    const ux = edgeDx / len;
+    const uy = edgeDy / len;
+    const vx = -uy;
+    const vy = ux;
+
+    let minU = Infinity;
+    let maxU = -Infinity;
+    let minV = Infinity;
+    let maxV = -Infinity;
+    for (const p of hull) {
+      const u = (p.x - a.x) * ux + (p.y - a.y) * uy;
+      const v = (p.x - a.x) * vx + (p.y - a.y) * vy;
+      minU = Math.min(minU, u);
+      maxU = Math.max(maxU, u);
+      minV = Math.min(minV, v);
+      maxV = Math.max(maxV, v);
+    }
+    const area = (maxU - minU) * (maxV - minV);
+    if (area < bestArea) {
+      bestArea = area;
+      best = { a, ux, uy, vx, vy, minU, maxU, minV, maxV };
+    }
+  }
+  if (!best) return null;
+  const { a, ux, uy, vx, vy, minU, maxU, minV, maxV } = best;
+  const corner = (u, v) => ({
+    x: a.x + ux * u + vx * v,
+    y: a.y + uy * u + vy * v,
+  });
+  return [
+    corner(minU, minV),
+    corner(maxU, minV),
+    corner(maxU, maxV),
+    corner(minU, maxV),
+  ];
 }
 
 function erode(bin, w, h, r = 1) {
@@ -800,7 +893,9 @@ export function scanDocument(source) {
   }));
 
   const [tl, tr, br, bl] = orderCorners(srcQuad);
-  const ordered = [tl, tr, br, bl];
+  // Inset slightly so desk fringe is not included in the warp
+  let ordered = shrinkQuad([tl, tr, br, bl], 0.025);
+  ordered = orderCorners(ordered);
   const widthA = Math.hypot(tr.x - tl.x, tr.y - tl.y);
   const widthB = Math.hypot(br.x - bl.x, br.y - bl.y);
   const heightA = Math.hypot(bl.x - tl.x, bl.y - tl.y);
