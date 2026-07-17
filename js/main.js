@@ -1,16 +1,12 @@
 import { A4Stage } from "./stage.js";
 import { jpegToA4Pdf } from "./pdf.js";
-import { CANVAS_PRESETS, getPreset } from "./presets.js";
 
 const stage = new A4Stage(document.getElementById("stage"));
 const toastEl = document.getElementById("toast");
 const layerList = document.getElementById("layerList");
 const fileInput = document.getElementById("fileImages");
 const uploadLabel = fileInput.closest(".upload");
-const rotSlider = document.getElementById("optRotation");
-const presetSelect = document.getElementById("optPreset");
 let toastTimer = 0;
-let syncingRot = false;
 
 function toast(msg) {
   toastEl.hidden = false;
@@ -21,56 +17,22 @@ function toast(msg) {
   }, 2400);
 }
 
-function syncPresetChrome() {
-  const p = stage.preset;
-  document.getElementById("presetDesc").textContent = p.desc;
-  document.getElementById("pageLabel").textContent = `${p.name} · ${p.pageMm.w}×${p.pageMm.h} mm`;
-  document.getElementById("scanHint").textContent = p.scanAspect
-    ? `智能裁切按「${p.scanLabel}」比例拉正（${p.scanAspect.toFixed(2)}）`
-    : "智能裁切：自动识别文档四角并透视拉正";
-  const btn = document.getElementById("btnRemoveBg");
-  btn.textContent = `智能裁切${p.scanLabel !== "文档" ? p.scanLabel : ""}`;
-}
-
-function syncOptions() {
-  stage.setOptions({
-    enhance: document.getElementById("optEnhance").checked,
-    docMode: document.getElementById("optDocMode").checked,
-    strength: Number(document.getElementById("optStrength").value),
-  });
-  document.getElementById("strengthVal").textContent = String(
-    document.getElementById("optStrength").value
-  );
-}
-
 function syncChrome() {
   const hasSel = !!stage.selected;
   document.getElementById("selectionLabel").textContent = stage.getSelectionLabel();
   document.getElementById("itemCount").textContent = `${stage.items.length} 张图片`;
-  for (const id of [
-    "btnDelete",
-    "btnDuplicate",
-    "btnBringFront",
-    "btnSendBack",
-    "btnRemoveBg",
-    "btnRotateL",
-    "btnRotateR",
-  ]) {
-    document.getElementById(id).disabled = !hasSel;
-  }
+  document.getElementById("btnDelete").disabled = !hasSel;
+  document.getElementById("btnRemoveBg").disabled = !hasSel;
   document.getElementById("btnUndoBg").disabled = !(hasSel && stage.selected?._backup);
-  rotSlider.disabled = !hasSel;
-  syncingRot = true;
-  rotSlider.value = String(Math.round(stage.selected?.rotation || 0) % 360);
-  document.getElementById("rotVal").textContent = rotSlider.value;
-  syncingRot = false;
   renderLayerList();
 }
 
 function renderLayerList() {
   layerList.innerHTML = "";
-  const ordered = [...stage.items].reverse();
-  for (const it of ordered) {
+  const labels = ["正面", "反面"];
+  const ordered = [...stage.items];
+  for (let i = 0; i < ordered.length; i++) {
+    const it = ordered[i];
     const li = document.createElement("li");
     if (it.id === stage.selectedId) li.classList.add("active");
     const thumb = document.createElement("canvas");
@@ -88,31 +50,16 @@ function renderLayerList() {
     tctx.drawImage(it.img, (28 - dw) / 2, (28 - dh) / 2, dw, dh);
     const name = document.createElement("span");
     name.className = "name";
-    name.textContent = it.bgRemoved ? `${it.name} · 已裁切` : it.name;
-    name.title = name.textContent;
+    const slot = labels[i] || `图${i + 1}`;
+    name.textContent = it.bgRemoved ? `${slot} · 已裁切` : `${slot} · ${it.name}`;
+    name.title = it.name;
     li.append(thumb, name);
-    li.addEventListener("click", () => {
-      stage.select(it.id);
-    });
+    li.addEventListener("click", () => stage.select(it.id));
     layerList.appendChild(li);
   }
 }
 
 stage.onChange = syncChrome;
-
-presetSelect.addEventListener("change", () => {
-  const id = presetSelect.value;
-  if (!CANVAS_PRESETS[id]) return;
-  stage.setPreset(id);
-  syncPresetChrome();
-  if (stage.items.length) {
-    stage.autoLayout();
-    toast(`已切换为「${getPreset(id).name}」并自动排版`);
-  } else {
-    toast(`已切换为「${getPreset(id).name}」`);
-  }
-  syncChrome();
-});
 
 async function addFiles(fileList) {
   try {
@@ -121,8 +68,13 @@ async function addFiles(fileList) {
       toast("请选择图片文件");
       return;
     }
-    toast(`已添加 ${n} 张图片`);
-    if (stage.preset.layout !== "free") stage.autoLayout();
+    // Keep at most 2 images for front/back
+    while (stage.items.length > 2) {
+      stage.selectedId = stage.items[stage.items.length - 1].id;
+      stage.removeSelected();
+    }
+    stage.autoLayout();
+    toast(`已添加，共 ${stage.items.length} 张（正面 / 反面）`);
     syncChrome();
   } catch {
     toast("图片读取失败");
@@ -147,63 +99,14 @@ uploadLabel.addEventListener("drop", async (e) => {
   await addFiles(e.dataTransfer.files);
 });
 
-for (const id of ["optEnhance", "optDocMode", "optStrength"]) {
-  document.getElementById(id).addEventListener("input", syncOptions);
-  document.getElementById(id).addEventListener("change", syncOptions);
-}
-
 document.getElementById("btnFit").addEventListener("click", () => {
   if (!stage.items.length) {
-    toast("请先添加图片");
+    toast("请先上传图片");
     return;
   }
   stage.autoLayout();
-  toast(`已按「${stage.preset.name}」自动排版`);
+  toast("已填入正面 / 反面槽位");
   syncChrome();
-});
-
-document.getElementById("btnCenter").addEventListener("click", () => {
-  if (!stage.items.length) {
-    toast("请先添加图片");
-    return;
-  }
-  const moved = stage.centerHorizontally();
-  toast(moved ? "已水平居中" : "已经在水平居中位置");
-  syncChrome();
-});
-
-document.getElementById("btnBringFront").addEventListener("click", () => {
-  if (stage.bringToFront()) {
-    toast("已图层置顶（列表最上）");
-    syncChrome();
-  }
-});
-
-document.getElementById("btnSendBack").addEventListener("click", () => {
-  if (stage.sendToBack()) {
-    toast("已图层置底（列表最下，重叠时才看得出）");
-    syncChrome();
-  }
-});
-
-document.getElementById("btnRotateL").addEventListener("click", () => {
-  stage.rotateSelected(-90);
-  toast("已旋转 -90°");
-  syncChrome();
-});
-
-document.getElementById("btnRotateR").addEventListener("click", () => {
-  stage.rotateSelected(90);
-  toast("已旋转 +90°");
-  syncChrome();
-});
-
-rotSlider.addEventListener("input", () => {
-  if (syncingRot) return;
-  const deg = Number(rotSlider.value);
-  document.getElementById("rotVal").textContent = String(deg);
-  stage.setSelectedRotation(deg);
-  document.getElementById("selectionLabel").textContent = stage.getSelectionLabel();
 });
 
 document.getElementById("btnRemoveBg").addEventListener("click", () => {
@@ -213,37 +116,37 @@ document.getElementById("btnRemoveBg").addEventListener("click", () => {
   }
   const btn = document.getElementById("btnRemoveBg");
   btn.disabled = true;
-  const prevLabel = btn.textContent;
-  btn.textContent = "处理中…";
-  document.getElementById("optDocMode").checked = false;
-  document.getElementById("optEnhance").checked = false;
-  syncOptions();
+  btn.textContent = "裁切中…";
   setTimeout(() => {
-    try {
-      const result = stage.removeSelectedBackground();
-      if (!result.ok) {
-        toast(result.message);
-      } else if (result.recrop) {
-        toast(`已从原图重新裁切 · ${stage.preset.scanLabel}`);
-      } else {
-        const m = result.meta?.method === "perspective" ? "已透视拉正" : "已裁切";
-        toast(`${m} · ${stage.preset.scanLabel}`);
-      }
-      syncChrome();
-    } catch (err) {
-      console.error(err);
-      toast("智能裁切失败");
-    } finally {
-      btn.textContent = prevLabel;
-      syncPresetChrome();
-      syncChrome();
-    }
+    const result = stage.removeSelectedBackground();
+    if (!result.ok) toast(result.message);
+    else toast(result.recrop ? "已从原图重新裁切并填入槽位" : "已裁切并填入槽位");
+    btn.textContent = "裁切选中到槽位";
+    syncChrome();
+  }, 40);
+});
+
+document.getElementById("btnCropAll").addEventListener("click", () => {
+  if (!stage.items.length) {
+    toast("请先上传正面、反面图片");
+    return;
+  }
+  const btn = document.getElementById("btnCropAll");
+  btn.disabled = true;
+  btn.textContent = "处理中…";
+  setTimeout(() => {
+    const result = stage.cropAllToSlots();
+    if (!result.ok) toast(result.message);
+    else toast(`已裁切 ${result.done} 张并排入正反面`);
+    btn.disabled = false;
+    btn.textContent = "一键裁切全部并排版";
+    syncChrome();
   }, 40);
 });
 
 document.getElementById("btnUndoBg").addEventListener("click", () => {
   if (stage.undoBackground()) {
-    toast("已恢复裁切前的图片");
+    toast("已恢复裁切前");
     syncChrome();
   }
 });
@@ -251,44 +154,15 @@ document.getElementById("btnUndoBg").addEventListener("click", () => {
 document.getElementById("btnDelete").addEventListener("click", () => {
   if (stage.removeSelected()) {
     toast("已删除");
+    stage.autoLayout();
     syncChrome();
   }
-});
-
-document.getElementById("btnDuplicate").addEventListener("click", async () => {
-  await stage.duplicateSelected();
-  toast("已复制");
-  syncChrome();
 });
 
 document.getElementById("btnReset").addEventListener("click", () => {
-  document.getElementById("optEnhance").checked = false;
-  document.getElementById("optDocMode").checked = false;
-  document.getElementById("optStrength").value = "70";
   stage.clear();
-  syncOptions();
   syncChrome();
   toast("已重置");
-});
-
-document.addEventListener("keydown", (e) => {
-  const tag = document.activeElement?.tagName;
-  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-  if (e.key === "Delete" || e.key === "Backspace") {
-    if (stage.removeSelected()) {
-      e.preventDefault();
-      toast("已删除");
-      syncChrome();
-    }
-  }
-  if (e.key === "[" && stage.selected) {
-    stage.rotateSelected(-90);
-    syncChrome();
-  }
-  if (e.key === "]" && stage.selected) {
-    stage.rotateSelected(90);
-    syncChrome();
-  }
 });
 
 document.getElementById("btnExport").addEventListener("click", async () => {
@@ -314,7 +188,7 @@ document.getElementById("btnExport").addEventListener("click", async () => {
     const a = document.createElement("a");
     const url = URL.createObjectURL(pdf);
     a.href = url;
-    a.download = `a4-compose_${stage.preset.id}_${dpi}dpi.pdf`;
+    a.download = `身份证_A4_${dpi}dpi.pdf`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 2000);
     toast("PDF 已下载");
@@ -327,6 +201,4 @@ document.getElementById("btnExport").addEventListener("click", async () => {
   }
 });
 
-syncOptions();
-syncPresetChrome();
 syncChrome();

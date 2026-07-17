@@ -3,19 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta
-      name="description"
-      content="a4-compose — Arrange any images on an A4 canvas and export PDF locally in the browser."
-    />
-    <title>a4-compose</title>
+    <meta name="description" content="身份证 A4 正反面排版：按边缘裁切，导出 PDF。" />
+    <title>身份证 A4 复印</title>
     <link rel="stylesheet" href="css/style.css" />
   </head>
   <body>
     <div class="app">
       <header class="header">
         <div class="brand">
-          <h1>a4-compose</h1>
-      <p>任意图片 · A4 画布排版 · 智能裁切 · 导出 PDF</p>
+          <h1>身份证 A4</h1>
+          <p>上传正反面 → 按边缘裁切 → 填入槽位 → 导出 PDF</p>
         </div>
         <div class="header-actions">
           <button type="button" id="btnReset" class="btn ghost">重置</button>
@@ -25,93 +22,49 @@
 
       <aside class="sidebar">
         <section class="panel">
-          <h2>画布类型</h2>
-          <label class="slider">
-            <span>模板</span>
-            <select id="optPreset">
-              <option value="id-card" selected>身份证复印</option>
-              <option value="hukou-page">户口页</option>
-              <option value="residence">居住证复印</option>
-              <option value="license">营业执照</option>
-              <option value="a4-free">A4 通用</option>
-            </select>
-          </label>
-          <p class="hint" id="presetDesc">A4 上正反面标准排版（85.6×54 mm）</p>
-        </section>
-
-        <section class="panel">
-          <h2>添加图片</h2>
+          <h2>上传身份证</h2>
           <label class="upload upload-multi">
-            <span>选择或拖入图片</span>
+            <span>选择正面、反面图片</span>
             <input type="file" id="fileImages" accept="image/*" multiple />
-            <em>支持一次添加多张</em>
+            <em>可一次选两张，或分两次添加</em>
           </label>
           <ul class="layer-list" id="layerList"></ul>
           <div class="btn-row">
             <button type="button" id="btnDelete" class="btn" disabled>删除选中</button>
-            <button type="button" id="btnDuplicate" class="btn" disabled>复制</button>
+            <button type="button" id="btnUndoBg" class="btn" disabled>撤销裁切</button>
           </div>
         </section>
 
         <section class="panel">
-          <h2>图像处理</h2>
+          <h2>裁切排版</h2>
           <button type="button" id="btnRemoveBg" class="btn primary block" disabled>
-            智能裁切
+            裁切选中到槽位
           </button>
-          <button type="button" id="btnUndoBg" class="btn block" disabled>
-            撤销裁切
+          <button type="button" id="btnCropAll" class="btn block">
+            一键裁切全部并排版
           </button>
-          <p class="hint" id="scanHint">
-            按当前画布类型识别四角并透视拉正；多次点击会从原图重新裁切，不会越裁越碎
+          <p class="hint">
+            按身份证边缘裁切，自动转为横版并填入「正面 / 反面」槽位
           </p>
-          <label class="toggle">
-            <input type="checkbox" id="optDocMode" />
-            <span>证件 / 文档模式</span>
-          </label>
-          <p class="hint">去阴影、压白底；建议去背景后开启</p>
-          <label class="toggle">
-            <input type="checkbox" id="optEnhance" />
-            <span>清晰度增强</span>
-          </label>
-          <p class="hint">锐化 + 中对比度，让文字更清楚</p>
-          <label class="slider">
-            <span>处理强度 <b id="strengthVal">70</b>%</span>
-            <input type="range" id="optStrength" min="0" max="100" value="70" />
-          </label>
+          <button type="button" id="btnFit" class="btn block" style="margin-top: 8px">
+            重新填入正反面
+          </button>
         </section>
 
         <section class="panel">
-          <h2>画布操作</h2>
-          <p class="hint">拖动移动；滚轮缩放；Shift+滚轮旋转</p>
-          <div class="btn-row">
-            <button type="button" id="btnRotateL" class="btn" disabled>旋转 -90°</button>
-            <button type="button" id="btnRotateR" class="btn" disabled>旋转 +90°</button>
-          </div>
+          <h2>导出</h2>
           <label class="slider">
-            <span>自由旋转 <b id="rotVal">0</b>°</span>
-            <input type="range" id="optRotation" min="0" max="359" value="0" disabled />
-          </label>
-          <div class="btn-row" style="margin-top: 8px">
-            <button type="button" id="btnFit" class="btn">自动排版</button>
-            <button type="button" id="btnCenter" class="btn">水平居中</button>
-          </div>
-          <div class="btn-row" style="margin-top: 8px">
-            <button type="button" id="btnBringFront" class="btn" disabled>图层置顶</button>
-            <button type="button" id="btnSendBack" class="btn" disabled>图层置底</button>
-          </div>
-          <p class="hint">置顶/置底只改叠放顺序（重叠时才明显），左侧列表会同步</p>
-          <label class="slider">
-            <span>导出清晰度</span>
+            <span>清晰度</span>
             <select id="optDpi">
-              <option value="150">150 DPI（较快）</option>
+              <option value="150">150 DPI</option>
               <option value="200" selected>200 DPI（推荐）</option>
-              <option value="300">300 DPI（高清）</option>
+              <option value="300">300 DPI</option>
             </select>
           </label>
         </section>
 
         <section class="panel privacy">
-          <p>纯前端本地处理：图片不会上传到任何服务器。</p>
+          <p>纯本地处理，图片不会上传服务器。</p>
         </section>
       </aside>
 
@@ -119,12 +72,12 @@
         <div class="stage-toolbar">
           <span id="selectionLabel">未选中</span>
           <span class="sep"></span>
-          <span id="pageLabel">身份证复印 · A4 · 210×297 mm</span>
+          <span>身份证复印 · A4 · 210×297 mm</span>
           <span class="sep"></span>
           <span id="itemCount">0 张图片</span>
         </div>
         <div class="stage-scroll" id="stageScroll">
-          <canvas id="stage" width="794" height="1123" aria-label="A4 canvas"></canvas>
+          <canvas id="stage" width="794" height="1123" aria-label="身份证 A4 画布"></canvas>
         </div>
       </main>
     </div>

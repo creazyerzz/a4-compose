@@ -57,23 +57,14 @@ export class A4Stage {
    * Switch canvas / document template.
    * @param {string} presetId
    */
-  setPreset(presetId) {
-    const preset = getPreset(presetId);
+  setPreset() {
+    const preset = getPreset();
     this.preset = preset;
     const size = pageSizePx(preset);
-    const sx = size.w / this.pageW;
-    const sy = size.h / this.pageH;
     this.pageW = size.w;
     this.pageH = size.h;
     this.canvas.width = size.w;
     this.canvas.height = size.h;
-    // Scale existing items roughly into new page
-    for (const it of this.items) {
-      it.x *= sx;
-      it.y *= sy;
-      it.w *= sx;
-      it.h *= sy;
-    }
     this.requestRender();
     this.onChange?.();
     return preset;
@@ -288,15 +279,12 @@ export class A4Stage {
   }
 
   /**
-   * Smart crop selected item (CamScanner-style).
-   * Always runs on the ORIGINAL upload (backup) — never nest-crops a cropped result.
-   * @returns {{ ok: true, meta: object, recrop?: boolean } | { ok: false, message: string }}
+   * Smart crop selected item to ID-card edges, landscape, fill front/back slot.
    */
   removeSelectedBackground() {
     const it = this.selected;
     if (!it) return { ok: false, message: "请先选中一张图片" };
 
-    // Snapshot ORIGINAL pixels once; later clicks always re-crop from this
     if (!it._backup) {
       const bw = it.img.naturalWidth || it.img.width;
       const bh = it.img.naturalHeight || it.img.height;
@@ -304,47 +292,18 @@ export class A4Stage {
       snap.width = bw;
       snap.height = bh;
       snap.getContext("2d").drawImage(it.img, 0, 0);
-      it._backup = {
-        canvas: snap,
-        w: it.w,
-        h: it.h,
-        x: it.x,
-        y: it.y,
-      };
+      it._backup = { canvas: snap, w: it.w, h: it.h, x: it.x, y: it.y };
     }
 
-    const source = it._backup.canvas;
     const wasCropped = !!it.bgRemoved;
 
     try {
-      const cleaned = removeBackground(source, {
+      let cleaned = removeBackground(it._backup.canvas, {
         targetAspect: this.preset.scanAspect,
       });
-      // Fit into first empty guide if any, else keep center
-      const guide = this._nextGuideSlot();
-      const prevCx = it.x + it.w / 2;
-      const prevCy = it.y + it.h / 2;
-      if (guide) {
-        const fit = fitInside(cleaned.width, cleaned.height, guide.w, guide.h);
-        it.img = cleaned;
-        it.bgRemoved = true;
-        it.rotation = 0;
-        it.w = fit.w;
-        it.h = fit.h;
-        it.x = guide.x + (guide.w - fit.w) / 2;
-        it.y = guide.y + (guide.h - fit.h) / 2;
-      } else {
-        const maxW = this.pageW * 0.72;
-        const maxH = this.pageH * 0.4;
-        const fit = Math.min(maxW / cleaned.width, maxH / cleaned.height);
-        it.img = cleaned;
-        it.bgRemoved = true;
-        it.rotation = 0;
-        it.w = cleaned.width * fit;
-        it.h = cleaned.height * fit;
-        it.x = prevCx - it.w / 2;
-        it.y = prevCy - it.h / 2;
-      }
+      cleaned = ensureLandscapeCard(cleaned);
+      const slotIndex = this._slotIndexForItem(it);
+      this._fillGuide(it, cleaned, slotIndex);
       this._processed.delete(it.id);
       this._flash(it);
       this.requestRender();
@@ -357,9 +316,60 @@ export class A4Stage {
     } catch (err) {
       return {
         ok: false,
-        message: err?.message || "智能裁切失败",
+        message: err?.message || "裁切失败",
       };
     }
+  }
+
+  /**
+   * Crop every item from original and place into 正面 / 反面.
+   */
+  cropAllToSlots() {
+    if (!this.items.length) return { ok: false, message: "请先上传身份证图片" };
+    let done = 0;
+    const errors = [];
+    for (let i = 0; i < this.items.length; i++) {
+      this.selectedId = this.items[i].id;
+      const r = this.removeSelectedBackground();
+      if (r.ok) done++;
+      else errors.push(r.message);
+    }
+    this.autoLayout();
+    this.onChange?.();
+    if (!done) return { ok: false, message: errors[0] || "裁切失败" };
+    return { ok: true, done, errors };
+  }
+
+  /** Which guide slot this item should use (by order: 0=正面, 1=反面). */
+  _slotIndexForItem(it) {
+    const idx = this.items.findIndex((x) => x.id === it.id);
+    return Math.min(Math.max(idx, 0), Math.max(0, (this.preset.guides?.length || 1) - 1));
+  }
+
+  /** Place card image to exactly fill a guide slot (landscape). */
+  _fillGuide(it, cardCanvas, slotIndex) {
+    const guides = this.preset.guides || [];
+    const g = guides[Math.min(slotIndex, guides.length - 1)];
+    if (!g) {
+      it.img = cardCanvas;
+      it.bgRemoved = true;
+      it.rotation = 0;
+      return;
+    }
+    const slot = {
+      x: mmToPx(g.xMm),
+      y: mmToPx(g.yMm),
+      w: mmToPx(g.wMm),
+      h: mmToPx(g.hMm),
+    };
+    it.img = cardCanvas;
+    it.bgRemoved = true;
+    it.rotation = 0;
+    // Exact fill of 85.6×54 slot (card already landscape with matching aspect)
+    it.w = slot.w;
+    it.h = slot.h;
+    it.x = slot.x;
+    it.y = slot.y;
   }
 
   /** Restore image from before document scan. */
@@ -399,7 +409,6 @@ export class A4Stage {
       });
       if (!occupied) return slot;
     }
-    // all occupied → last guide
     const g = guides[guides.length - 1];
     return {
       x: mmToPx(g.xMm),
@@ -409,145 +418,55 @@ export class A4Stage {
     };
   }
 
-  /** Layout according to current canvas preset. */
+  /** Place items into 正面 / 反面 slots (exact fill if cropped). */
   autoLayout() {
     const n = this.items.length;
     if (!n) return;
-    const layout = this.preset.layout;
+    const guides = this.preset.guides || [];
+    if (!guides.length) return;
 
-    if (layout === "id-duo" && this.preset.guides.length) {
-      const goals = [];
-      for (let i = 0; i < n; i++) {
-        const it = this.items[i];
-        const g = this.preset.guides[Math.min(i, this.preset.guides.length - 1)];
-        const slot = {
-          x: mmToPx(g.xMm),
-          y: mmToPx(g.yMm),
-          w: mmToPx(g.wMm),
-          h: mmToPx(g.hMm),
-        };
-        it.rotation = 0;
-        const nw = it.img.naturalWidth || it.img.width;
-        const nh = it.img.naturalHeight || it.img.height;
-        const fit = fitInside(nw, nh, slot.w, slot.h);
-        goals.push({
-          it,
-          fromX: it.x,
-          fromY: it.y,
-          fromW: it.w,
-          fromH: it.h,
-          toX: slot.x + (slot.w - fit.w) / 2,
-          toY: slot.y + (slot.h - fit.h) / 2,
-          toW: fit.w,
-          toH: fit.h,
-        });
-      }
-      this._animate(320, (t) => {
-        const e = easeOutCubic(t);
-        for (const g of goals) {
-          g.it.x = g.fromX + (g.toX - g.fromX) * e;
-          g.it.y = g.fromY + (g.toY - g.fromY) * e;
-          g.it.w = g.fromW + (g.toW - g.fromW) * e;
-          g.it.h = g.fromH + (g.toH - g.fromH) * e;
-        }
-      });
-      return;
-    }
-
-    if (layout === "single-page" && this.preset.guides[0]) {
-      const g = this.preset.guides[0];
+    const goals = [];
+    for (let i = 0; i < n; i++) {
+      const it = this.items[i];
+      const g = guides[Math.min(i, guides.length - 1)];
       const slot = {
         x: mmToPx(g.xMm),
         y: mmToPx(g.yMm),
         w: mmToPx(g.wMm),
         h: mmToPx(g.hMm),
       };
-      const it = this.items[0];
       it.rotation = 0;
-      const nw = it.img.naturalWidth || it.img.width;
-      const nh = it.img.naturalHeight || it.img.height;
-      const fit = fitInside(nw, nh, slot.w, slot.h);
-      const goals = [
-        {
-          it,
-          fromX: it.x,
-          fromY: it.y,
-          fromW: it.w,
-          fromH: it.h,
-          toX: slot.x + (slot.w - fit.w) / 2,
-          toY: slot.y + (slot.h - fit.h) / 2,
-          toW: fit.w,
-          toH: fit.h,
-        },
-      ];
-      // Extra images below if any
-      for (let i = 1; i < n; i++) {
-        const extra = this.items[i];
-        extra.rotation = 0;
-        const fit2 = fitInside(
-          extra.img.naturalWidth || extra.img.width,
-          extra.img.naturalHeight || extra.img.height,
-          slot.w * 0.5,
-          slot.h * 0.25
-        );
-        goals.push({
-          it: extra,
-          fromX: extra.x,
-          fromY: extra.y,
-          fromW: extra.w,
-          fromH: extra.h,
-          toX: slot.x + (slot.w - fit2.w) / 2,
-          toY: slot.y + slot.h - fit2.h - mmToPx(4) + i * mmToPx(2),
-          toW: fit2.w,
-          toH: fit2.h,
-        });
+      let toW = slot.w;
+      let toH = slot.h;
+      if (!it.bgRemoved) {
+        const nw = it.img.naturalWidth || it.img.width;
+        const nh = it.img.naturalHeight || it.img.height;
+        // Prefer landscape fit into slot
+        const srcW = nw >= nh ? nw : nh;
+        const srcH = nw >= nh ? nh : nw;
+        const fit = fitInside(srcW, srcH, slot.w, slot.h);
+        toW = fit.w;
+        toH = fit.h;
       }
-      this._animate(320, (t) => {
-        const e = easeOutCubic(t);
-        for (const g of goals) {
-          g.it.x = g.fromX + (g.toX - g.fromX) * e;
-          g.it.y = g.fromY + (g.toY - g.fromY) * e;
-          g.it.w = g.fromW + (g.toW - g.fromW) * e;
-          g.it.h = g.fromH + (g.toH - g.fromH) * e;
-        }
-      });
-      return;
-    }
-
-    // free: vertical stack
-    const marginX = mmToPx(this.preset.marginMm);
-    const marginY = mmToPx(this.preset.marginMm);
-    const gap = mmToPx(12);
-    const maxW = this.pageW - marginX * 2;
-    const availH = this.pageH - marginY * 2 - gap * Math.max(0, n - 1);
-    const slotH = availH / n;
-
-    for (const it of this.items) {
-      it.rotation = 0;
-      const nw = it.img.naturalWidth || it.img.width;
-      const nh = it.img.naturalHeight || it.img.height;
-      const fit = fitInside(nw, nh, maxW, slotH);
-      it.w = fit.w;
-      it.h = fit.h;
-    }
-
-    const goals = [];
-    let y = marginY;
-    for (const it of this.items) {
       goals.push({
         it,
         fromX: it.x,
         fromY: it.y,
-        toX: (this.pageW - it.w) / 2,
-        toY: y + (slotH - it.h) / 2,
+        fromW: it.w,
+        fromH: it.h,
+        toX: slot.x + (slot.w - toW) / 2,
+        toY: slot.y + (slot.h - toH) / 2,
+        toW,
+        toH,
       });
-      y += slotH + gap;
     }
-    this._animate(320, (t) => {
+    this._animate(280, (t) => {
       const e = easeOutCubic(t);
       for (const g of goals) {
         g.it.x = g.fromX + (g.toX - g.fromX) * e;
         g.it.y = g.fromY + (g.toY - g.fromY) * e;
+        g.it.w = g.fromW + (g.toW - g.fromW) * e;
+        g.it.h = g.fromH + (g.toH - g.fromH) * e;
       }
     });
   }
@@ -757,11 +676,7 @@ export class A4Stage {
       ctx.font = "15px sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText(
-        `「${this.preset.name}」添加图片后可拖动 / 旋转排版`,
-        pageW / 2,
-        pageH / 2
-      );
+      ctx.fillText("上传身份证正反面，裁切后自动填入上方槽位", pageW / 2, pageH / 2);
       return;
     }
 
@@ -800,6 +715,22 @@ export class A4Stage {
 
 function easeOutCubic(t) {
   return 1 - Math.pow(1 - t, 3);
+}
+
+/** Rotate portrait crop to landscape so it fills 正面/反面横槽. */
+function ensureLandscapeCard(canvas) {
+  const w = canvas.width || canvas.naturalWidth;
+  const h = canvas.height || canvas.naturalHeight;
+  if (w >= h) return canvas;
+  const out = document.createElement("canvas");
+  out.width = h;
+  out.height = w;
+  const ctx = out.getContext("2d");
+  ctx.translate(out.width, 0);
+  ctx.rotate(Math.PI / 2);
+  ctx.drawImage(canvas, 0, 0);
+  if (canvas.__bgMeta) out.__bgMeta = { ...canvas.__bgMeta, rotated: 90 };
+  return out;
 }
 
 function fitInside(srcW, srcH, maxW, maxH) {

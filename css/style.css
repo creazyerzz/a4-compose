@@ -255,6 +255,11 @@ select {
   margin-bottom: 8px;
 }
 
+.btn.block + .btn.block {
+  margin-top: 0;
+}
+
+
 .privacy p {
   margin: 0;
   color: var(--muted);
