@@ -1,13 +1,13 @@
 import { processImage, removeBackground } from "./enhance.js";
+import {
+  DEFAULT_PRESET_ID,
+  getPreset,
+  mmToPx,
+  pageSizePx,
+  PREVIEW_DPI,
+} from "./presets.js";
 
-/** A4 size in millimeters */
-export const A4_MM = { w: 210, h: 297 };
-/** Preview canvas ≈ 96 DPI A4 (794×1123) */
-export const PREVIEW_DPI = 96;
-
-export function mmToPx(mm, dpi = PREVIEW_DPI) {
-  return (mm / 25.4) * dpi;
-}
+export { PREVIEW_DPI, mmToPx };
 
 let nextId = 1;
 
@@ -30,8 +30,12 @@ export class A4Stage {
   constructor(canvas) {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d");
-    this.pageW = canvas.width;
-    this.pageH = canvas.height;
+    this.preset = getPreset(DEFAULT_PRESET_ID);
+    const size = pageSizePx(this.preset);
+    this.pageW = size.w;
+    this.pageH = size.h;
+    canvas.width = size.w;
+    canvas.height = size.h;
     /** @type {StageItem[]} bottom → top */
     this.items = [];
     /** @type {number|null} */
@@ -47,6 +51,32 @@ export class A4Stage {
 
     this._bind();
     this.requestRender();
+  }
+
+  /**
+   * Switch canvas / document template.
+   * @param {string} presetId
+   */
+  setPreset(presetId) {
+    const preset = getPreset(presetId);
+    this.preset = preset;
+    const size = pageSizePx(preset);
+    const sx = size.w / this.pageW;
+    const sy = size.h / this.pageH;
+    this.pageW = size.w;
+    this.pageH = size.h;
+    this.canvas.width = size.w;
+    this.canvas.height = size.h;
+    // Scale existing items roughly into new page
+    for (const it of this.items) {
+      it.x *= sx;
+      it.y *= sy;
+      it.w *= sx;
+      it.h *= sy;
+    }
+    this.requestRender();
+    this.onChange?.();
+    return preset;
   }
 
   _bind() {
@@ -284,20 +314,34 @@ export class A4Stage {
     }
 
     try {
-      const cleaned = removeBackground(it.img);
+      const cleaned = removeBackground(it.img, {
+        targetAspect: this.preset.scanAspect,
+      });
       const prevCx = it.x + it.w / 2;
       const prevCy = it.y + it.h / 2;
-      // Fit scanned card onto canvas with sensible size
-      const maxW = this.pageW * 0.72;
-      const maxH = this.pageH * 0.4;
-      const fit = Math.min(maxW / cleaned.width, maxH / cleaned.height);
-      it.img = cleaned;
-      it.bgRemoved = true;
-      it.rotation = 0;
-      it.w = cleaned.width * fit;
-      it.h = cleaned.height * fit;
-      it.x = prevCx - it.w / 2;
-      it.y = prevCy - it.h / 2;
+      // Fit into first empty guide if any, else sensible default
+      const guide = this._nextGuideSlot();
+      if (guide) {
+        const fit = fitInside(cleaned.width, cleaned.height, guide.w, guide.h);
+        it.img = cleaned;
+        it.bgRemoved = true;
+        it.rotation = 0;
+        it.w = fit.w;
+        it.h = fit.h;
+        it.x = guide.x + (guide.w - fit.w) / 2;
+        it.y = guide.y + (guide.h - fit.h) / 2;
+      } else {
+        const maxW = this.pageW * 0.72;
+        const maxH = this.pageH * 0.4;
+        const fit = Math.min(maxW / cleaned.width, maxH / cleaned.height);
+        it.img = cleaned;
+        it.bgRemoved = true;
+        it.rotation = 0;
+        it.w = cleaned.width * fit;
+        it.h = cleaned.height * fit;
+        it.x = prevCx - it.w / 2;
+        it.y = prevCy - it.h / 2;
+      }
       this._processed.delete(it.id);
       this._flash(it);
       this.requestRender();
@@ -332,12 +376,143 @@ export class A4Stage {
     return true;
   }
 
-  /** Stack images vertically with margins. */
+  /** Pick first guide that doesn't already contain an item center. */
+  _nextGuideSlot() {
+    const guides = this.preset.guides || [];
+    if (!guides.length) return null;
+    for (const g of guides) {
+      const slot = {
+        x: mmToPx(g.xMm),
+        y: mmToPx(g.yMm),
+        w: mmToPx(g.wMm),
+        h: mmToPx(g.hMm),
+      };
+      const occupied = this.items.some((it) => {
+        if (it.id === this.selectedId) return false;
+        const cx = it.x + it.w / 2;
+        const cy = it.y + it.h / 2;
+        return cx >= slot.x && cx <= slot.x + slot.w && cy >= slot.y && cy <= slot.y + slot.h;
+      });
+      if (!occupied) return slot;
+    }
+    // all occupied → last guide
+    const g = guides[guides.length - 1];
+    return {
+      x: mmToPx(g.xMm),
+      y: mmToPx(g.yMm),
+      w: mmToPx(g.wMm),
+      h: mmToPx(g.hMm),
+    };
+  }
+
+  /** Layout according to current canvas preset. */
   autoLayout() {
     const n = this.items.length;
     if (!n) return;
-    const marginX = mmToPx(18);
-    const marginY = mmToPx(18);
+    const layout = this.preset.layout;
+
+    if (layout === "id-duo" && this.preset.guides.length) {
+      const goals = [];
+      for (let i = 0; i < n; i++) {
+        const it = this.items[i];
+        const g = this.preset.guides[Math.min(i, this.preset.guides.length - 1)];
+        const slot = {
+          x: mmToPx(g.xMm),
+          y: mmToPx(g.yMm),
+          w: mmToPx(g.wMm),
+          h: mmToPx(g.hMm),
+        };
+        it.rotation = 0;
+        const nw = it.img.naturalWidth || it.img.width;
+        const nh = it.img.naturalHeight || it.img.height;
+        const fit = fitInside(nw, nh, slot.w, slot.h);
+        goals.push({
+          it,
+          fromX: it.x,
+          fromY: it.y,
+          fromW: it.w,
+          fromH: it.h,
+          toX: slot.x + (slot.w - fit.w) / 2,
+          toY: slot.y + (slot.h - fit.h) / 2,
+          toW: fit.w,
+          toH: fit.h,
+        });
+      }
+      this._animate(320, (t) => {
+        const e = easeOutCubic(t);
+        for (const g of goals) {
+          g.it.x = g.fromX + (g.toX - g.fromX) * e;
+          g.it.y = g.fromY + (g.toY - g.fromY) * e;
+          g.it.w = g.fromW + (g.toW - g.fromW) * e;
+          g.it.h = g.fromH + (g.toH - g.fromH) * e;
+        }
+      });
+      return;
+    }
+
+    if (layout === "single-page" && this.preset.guides[0]) {
+      const g = this.preset.guides[0];
+      const slot = {
+        x: mmToPx(g.xMm),
+        y: mmToPx(g.yMm),
+        w: mmToPx(g.wMm),
+        h: mmToPx(g.hMm),
+      };
+      const it = this.items[0];
+      it.rotation = 0;
+      const nw = it.img.naturalWidth || it.img.width;
+      const nh = it.img.naturalHeight || it.img.height;
+      const fit = fitInside(nw, nh, slot.w, slot.h);
+      const goals = [
+        {
+          it,
+          fromX: it.x,
+          fromY: it.y,
+          fromW: it.w,
+          fromH: it.h,
+          toX: slot.x + (slot.w - fit.w) / 2,
+          toY: slot.y + (slot.h - fit.h) / 2,
+          toW: fit.w,
+          toH: fit.h,
+        },
+      ];
+      // Extra images below if any
+      for (let i = 1; i < n; i++) {
+        const extra = this.items[i];
+        extra.rotation = 0;
+        const fit2 = fitInside(
+          extra.img.naturalWidth || extra.img.width,
+          extra.img.naturalHeight || extra.img.height,
+          slot.w * 0.5,
+          slot.h * 0.25
+        );
+        goals.push({
+          it: extra,
+          fromX: extra.x,
+          fromY: extra.y,
+          fromW: extra.w,
+          fromH: extra.h,
+          toX: slot.x + (slot.w - fit2.w) / 2,
+          toY: slot.y + slot.h - fit2.h - mmToPx(4) + i * mmToPx(2),
+          toW: fit2.w,
+          toH: fit2.h,
+        });
+      }
+      this._animate(320, (t) => {
+        const e = easeOutCubic(t);
+        for (const g of goals) {
+          g.it.x = g.fromX + (g.toX - g.fromX) * e;
+          g.it.y = g.fromY + (g.toY - g.fromY) * e;
+          g.it.w = g.fromW + (g.toW - g.fromW) * e;
+          g.it.h = g.fromH + (g.toH - g.fromH) * e;
+        }
+      });
+      return;
+    }
+
+    // free: vertical stack
+    const marginX = mmToPx(this.preset.marginMm);
+    const marginY = mmToPx(this.preset.marginMm);
     const gap = mmToPx(12);
     const maxW = this.pageW - marginX * 2;
     const availH = this.pageH - marginY * 2 - gap * Math.max(0, n - 1);
@@ -549,15 +724,40 @@ export class A4Stage {
     ctx.save();
     ctx.strokeStyle = "rgba(11, 110, 79, 0.12)";
     ctx.setLineDash([6, 6]);
-    ctx.strokeRect(mmToPx(15), mmToPx(15), pageW - mmToPx(30), pageH - mmToPx(30));
+    const m = mmToPx(this.preset.marginMm);
+    ctx.strokeRect(m, m, pageW - m * 2, pageH - m * 2);
     ctx.restore();
+
+    // Template guides (ID slots / hukou frame)
+    for (const g of this.preset.guides || []) {
+      const x = mmToPx(g.xMm);
+      const y = mmToPx(g.yMm);
+      const w = mmToPx(g.wMm);
+      const h = mmToPx(g.hMm);
+      ctx.save();
+      ctx.strokeStyle = "rgba(11, 110, 79, 0.35)";
+      ctx.setLineDash([5, 4]);
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(x, y, w, h);
+      ctx.setLineDash([]);
+      ctx.fillStyle = "rgba(11, 110, 79, 0.55)";
+      ctx.font = "12px sans-serif";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "bottom";
+      ctx.fillText(g.label, x + 4, y - 4);
+      ctx.restore();
+    }
 
     if (!this.items.length) {
       ctx.fillStyle = "#7a8b9c";
       ctx.font = "15px sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText("添加图片后，可在此 A4 画布中拖动 / 旋转排版", pageW / 2, pageH / 2);
+      ctx.fillText(
+        `「${this.preset.name}」添加图片后可拖动 / 旋转排版`,
+        pageW / 2,
+        pageH / 2
+      );
       return;
     }
 

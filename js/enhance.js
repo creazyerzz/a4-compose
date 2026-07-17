@@ -186,8 +186,8 @@ function midtoneContrast(data, amount) {
  * CamScanner-style: detect document corners → perspective warp → clean rectangle.
  * Keeps interior pixels intact (no color flood-fill eating patterns).
  */
-export function removeBackground(source) {
-  return scanDocument(source);
+export function removeBackground(source, opts = {}) {
+  return scanDocument(source, opts);
 }
 
 /**

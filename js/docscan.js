@@ -852,9 +852,11 @@ function fallbackAxisCrop(srcCanvas, data, w, h) {
 /**
  * CamScanner-style document extract.
  * @param {CanvasImageSource} source
+ * @param {{ targetAspect?: number|null }} [opts] targetAspect = width/height (e.g. ID 85.6/54)
  * @returns {HTMLCanvasElement}
  */
-export function scanDocument(source) {
+export function scanDocument(source, opts = {}) {
+  const targetAspect = opts.targetAspect ?? null;
   const srcW = source.naturalWidth || source.width;
   const srcH = source.naturalHeight || source.height;
   const srcCanvas = document.createElement("canvas");
@@ -892,10 +894,11 @@ export function scanDocument(source) {
     y: p.y / scale,
   }));
 
-  const [tl, tr, br, bl] = orderCorners(srcQuad);
+  const [tl0, tr0, br0, bl0] = orderCorners(srcQuad);
   // Inset slightly so desk fringe is not included in the warp
-  let ordered = shrinkQuad([tl, tr, br, bl], 0.025);
+  let ordered = shrinkQuad([tl0, tr0, br0, bl0], 0.025);
   ordered = orderCorners(ordered);
+  const [tl, tr, br, bl] = ordered;
   const widthA = Math.hypot(tr.x - tl.x, tr.y - tl.y);
   const widthB = Math.hypot(br.x - bl.x, br.y - bl.y);
   const heightA = Math.hypot(bl.x - tl.x, bl.y - tl.y);
@@ -903,14 +906,26 @@ export function scanDocument(source) {
   let outW = Math.round((widthA + widthB) / 2);
   let outH = Math.round((heightA + heightB) / 2);
 
-  // Prefer ID-card-like aspect if close
-  const ratio = Math.max(outW, outH) / Math.min(outW, outH);
-  const idRatio = 85.6 / 54;
-  if (Math.abs(ratio - idRatio) < 0.35) {
-    if (outW >= outH) {
-      outH = Math.round(outW / idRatio);
+  // Force output aspect from canvas preset when provided
+  if (targetAspect && targetAspect > 0.2 && targetAspect < 5) {
+    const long = Math.max(outW, outH);
+    if (targetAspect >= 1) {
+      outW = long;
+      outH = Math.round(long / targetAspect);
     } else {
-      outW = Math.round(outH / idRatio);
+      outH = long;
+      outW = Math.round(long * targetAspect);
+    }
+  } else {
+    // Prefer ID-card-like aspect if close
+    const ratio = Math.max(outW, outH) / Math.min(outW, outH);
+    const idRatio = 85.6 / 54;
+    if (Math.abs(ratio - idRatio) < 0.35) {
+      if (outW >= outH) {
+        outH = Math.round(outW / idRatio);
+      } else {
+        outW = Math.round(outH / idRatio);
+      }
     }
   }
 

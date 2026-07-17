@@ -25,6 +25,21 @@
 
       <aside class="sidebar">
         <section class="panel">
+          <h2>画布类型</h2>
+          <label class="slider">
+            <span>模板</span>
+            <select id="optPreset">
+              <option value="id-card" selected>身份证复印</option>
+              <option value="hukou-page">户口页</option>
+              <option value="residence">居住证复印</option>
+              <option value="license">营业执照</option>
+              <option value="a4-free">A4 通用</option>
+            </select>
+          </label>
+          <p class="hint" id="presetDesc">A4 上正反面标准排版（85.6×54 mm）</p>
+        </section>
+
+        <section class="panel">
           <h2>添加图片</h2>
           <label class="upload upload-multi">
             <span>选择或拖入图片</span>
@@ -41,13 +56,13 @@
         <section class="panel">
           <h2>图像处理</h2>
           <button type="button" id="btnRemoveBg" class="btn primary block" disabled>
-            智能裁切证件
+            智能裁切
           </button>
           <button type="button" id="btnUndoBg" class="btn block" disabled>
             撤销裁切
           </button>
-          <p class="hint">
-            类似扫描王：识别证件四角 → 透视拉正 → 裁成整齐矩形（不啃坏内部图案）
+          <p class="hint" id="scanHint">
+            按当前画布类型识别四角并透视拉正（身份证 / 户口页等比例不同）
           </p>
           <label class="toggle">
             <input type="checkbox" id="optDocMode" />
@@ -104,7 +119,7 @@
         <div class="stage-toolbar">
           <span id="selectionLabel">未选中</span>
           <span class="sep"></span>
-          <span>A4 · 210×297 mm</span>
+          <span id="pageLabel">身份证复印 · A4 · 210×297 mm</span>
           <span class="sep"></span>
           <span id="itemCount">0 张图片</span>
         </div>

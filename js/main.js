@@ -1,5 +1,6 @@
 import { A4Stage } from "./stage.js";
 import { jpegToA4Pdf } from "./pdf.js";
+import { CANVAS_PRESETS, getPreset } from "./presets.js";
 
 const stage = new A4Stage(document.getElementById("stage"));
 const toastEl = document.getElementById("toast");
@@ -7,6 +8,7 @@ const layerList = document.getElementById("layerList");
 const fileInput = document.getElementById("fileImages");
 const uploadLabel = fileInput.closest(".upload");
 const rotSlider = document.getElementById("optRotation");
+const presetSelect = document.getElementById("optPreset");
 let toastTimer = 0;
 let syncingRot = false;
 
@@ -17,6 +19,17 @@ function toast(msg) {
   toastTimer = setTimeout(() => {
     toastEl.hidden = true;
   }, 2400);
+}
+
+function syncPresetChrome() {
+  const p = stage.preset;
+  document.getElementById("presetDesc").textContent = p.desc;
+  document.getElementById("pageLabel").textContent = `${p.name} · ${p.pageMm.w}×${p.pageMm.h} mm`;
+  document.getElementById("scanHint").textContent = p.scanAspect
+    ? `智能裁切按「${p.scanLabel}」比例拉正（${p.scanAspect.toFixed(2)}）`
+    : "智能裁切：自动识别文档四角并透视拉正";
+  const btn = document.getElementById("btnRemoveBg");
+  btn.textContent = `智能裁切${p.scanLabel !== "文档" ? p.scanLabel : ""}`;
 }
 
 function syncOptions() {
@@ -87,6 +100,20 @@ function renderLayerList() {
 
 stage.onChange = syncChrome;
 
+presetSelect.addEventListener("change", () => {
+  const id = presetSelect.value;
+  if (!CANVAS_PRESETS[id]) return;
+  stage.setPreset(id);
+  syncPresetChrome();
+  if (stage.items.length) {
+    stage.autoLayout();
+    toast(`已切换为「${getPreset(id).name}」并自动排版`);
+  } else {
+    toast(`已切换为「${getPreset(id).name}」`);
+  }
+  syncChrome();
+});
+
 async function addFiles(fileList) {
   try {
     const n = await stage.addImages(fileList);
@@ -95,6 +122,7 @@ async function addFiles(fileList) {
       return;
     }
     toast(`已添加 ${n} 张图片`);
+    if (stage.preset.layout !== "free") stage.autoLayout();
     syncChrome();
   } catch {
     toast("图片读取失败");
@@ -130,7 +158,7 @@ document.getElementById("btnFit").addEventListener("click", () => {
     return;
   }
   stage.autoLayout();
-  toast("已自动排版");
+  toast(`已按「${stage.preset.name}」自动排版`);
   syncChrome();
 });
 
@@ -185,6 +213,7 @@ document.getElementById("btnRemoveBg").addEventListener("click", () => {
   }
   const btn = document.getElementById("btnRemoveBg");
   btn.disabled = true;
+  const prevLabel = btn.textContent;
   btn.textContent = "处理中…";
   document.getElementById("optDocMode").checked = false;
   document.getElementById("optEnhance").checked = false;
@@ -196,14 +225,15 @@ document.getElementById("btnRemoveBg").addEventListener("click", () => {
         toast(result.message);
       } else {
         const m = result.meta?.method === "perspective" ? "已透视拉正" : "已裁切";
-        toast(`${m}（可再开证件模式增强）`);
+        toast(`${m} · ${stage.preset.scanLabel}`);
       }
       syncChrome();
     } catch (err) {
       console.error(err);
       toast("智能裁切失败");
     } finally {
-      btn.textContent = "智能裁切证件";
+      btn.textContent = prevLabel;
+      syncPresetChrome();
       syncChrome();
     }
   }, 40);
@@ -282,7 +312,7 @@ document.getElementById("btnExport").addEventListener("click", async () => {
     const a = document.createElement("a");
     const url = URL.createObjectURL(pdf);
     a.href = url;
-    a.download = `a4-compose_${dpi}dpi.pdf`;
+    a.download = `a4-compose_${stage.preset.id}_${dpi}dpi.pdf`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 2000);
     toast("PDF 已下载");
@@ -296,4 +326,5 @@ document.getElementById("btnExport").addEventListener("click", async () => {
 });
 
 syncOptions();
+syncPresetChrome();
 syncChrome();

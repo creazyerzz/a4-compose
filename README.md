@@ -6,9 +6,10 @@ Local-first tool to arrange **any images** on an **A4 canvas** and export a PDF 
 
 ## Features
 
+- **Canvas templates**: ID card photocopy, hukou page, residence permit, business license, free A4
 - Upload one or many images (file picker or drag-and-drop)
 - Drag to move, scroll to scale, Shift+scroll / ±90° / slider to rotate
-- **Smart document crop** (CamScanner-style): detect 4 corners → perspective warp → clean rectangle
+- **Smart document crop** (CamScanner-style): detect 4 corners → perspective warp (aspect follows template)
 - Optional document mode (shadow flatten) and clarity enhance
 - Layer list: select, delete, duplicate, bring to front / send to back
 - Export single-page A4 PDF at 150 / 200 / 300 DPI
@@ -44,7 +45,7 @@ python3 -m http.server 5173
 
 ## 中文
 
-把任意图片放到 A4 画布上拖动 / 旋转排版，支持一键去背景、去阴影与清晰增强，导出 PDF。纯前端本地处理，不上传服务器。
+把任意图片放到多种画布模板（身份证 / 户口页 / 居住证 / 执照 / A4 通用）上排版，支持智能裁切与 PDF 导出。纯前端本地处理。
 
 ```bash
 python3 -m http.server 5173
