@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>a4-compose bg-remove selftest</title>
+    <style>
+      body {
+        font-family: ui-monospace, Menlo, monospace;
+        padding: 16px;
+        background: #111;
+        color: #eee;
+      }
+      .ok {
+        color: #4ade80;
+      }
+      .fail {
+        color: #f87171;
+      }
+      canvas {
+        background: #fff;
+        margin: 8px 8px 8px 0;
+        max-width: 240px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>bg-remove selftest</h1>
+    <pre id="log"></pre>
+    <div id="shots"></div>
+    <script type="module">
+      import { removeBackground } from "../js/enhance.js";
+
+      const logEl = document.getElementById("log");
+      const shots = document.getElementById("shots");
+      const lines = [];
+      function log(msg, cls) {
+        lines.push(msg);
+        logEl.textContent = lines.join("\n");
+        if (cls) logEl.className = cls;
+      }
+
+      function makeDeskCard() {
+        const c = document.createElement("canvas");
+        c.width = 320;
+        c.height = 240;
+        const ctx = c.getContext("2d");
+        ctx.fillStyle = "#c49648";
+        ctx.fillRect(0, 0, 320, 240);
+        ctx.fillStyle = "#78bed2";
+        ctx.fillRect(64, 53, 192, 134);
+        ctx.fillStyle = "#503c32";
+        ctx.fillRect(176, 77, 61, 86);
+        ctx.fillStyle = "#1a1a1a";
+        ctx.font = "14px sans-serif";
+        ctx.fillText("ID SAMPLE", 78, 90);
+        return c;
+      }
+
+      function contentRatio(canvas) {
+        const { data } = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
+        let content = 0;
+        for (let i = 0; i < data.length; i += 4) {
+          if (data[i] < 245 || data[i + 1] < 245 || data[i + 2] < 245) content++;
+        }
+        return content / (canvas.width * canvas.height);
+      }
+
+      function show(label, canvas) {
+        const wrap = document.createElement("div");
+        wrap.innerHTML = `<div>${label}</div>`;
+        wrap.appendChild(canvas);
+        shots.appendChild(wrap);
+      }
+
+      let failed = 0;
+      try {
+        const src = makeDeskCard();
+        show("input", src);
+        const out = removeBackground(src, { bakeCleanup: true });
+        show("output", out);
+        const ratio = contentRatio(out);
+        const meta = out.__bgMeta || {};
+        log(
+          `desk+card => ${out.width}x${out.height} content=${(ratio * 100).toFixed(1)}% tol=${meta.tolerance} metaContent=${(
+            (meta.contentRatio || 0) * 100
+          ).toFixed(1)}%`
+        );
+        if (ratio < 0.15 || out.width < 40 || out.height < 40) {
+          log("FAIL: subject missing / blank", "fail");
+          failed++;
+        } else {
+          log("PASS: subject preserved", "ok");
+        }
+      } catch (e) {
+        log("FAIL: " + e.message, "fail");
+        failed++;
+      }
+
+      document.title = failed ? "FAIL bg-remove" : "PASS bg-remove";
+      log(failed ? `\n${failed} failed` : "\nAll passed", failed ? "fail" : "ok");
+    </script>
+  </body>
+</html>

@@ -45,6 +45,7 @@ function syncChrome() {
   ]) {
     document.getElementById(id).disabled = !hasSel;
   }
+  document.getElementById("btnUndoBg").disabled = !(hasSel && stage.selected?._backup);
   rotSlider.disabled = !hasSel;
   syncingRot = true;
   rotSlider.value = String(Math.round(stage.selected?.rotation || 0) % 360);
@@ -185,14 +186,21 @@ document.getElementById("btnRemoveBg").addEventListener("click", () => {
   const btn = document.getElementById("btnRemoveBg");
   btn.disabled = true;
   btn.textContent = "处理中…";
-  // Yield to UI then process (can be heavy)
+  // Turn off live filters first — cleanup is baked into the result
+  document.getElementById("optDocMode").checked = false;
+  document.getElementById("optEnhance").checked = false;
+  syncOptions();
   setTimeout(() => {
     try {
-      stage.removeSelectedBackground();
-      document.getElementById("optDocMode").checked = true;
-      document.getElementById("optEnhance").checked = true;
-      syncOptions();
-      toast("已去背景；已自动开启文档模式 + 清晰增强");
+      const result = stage.removeSelectedBackground();
+      if (!result.ok) {
+        toast(result.message);
+      } else {
+        const pct = result.meta?.contentRatio
+          ? `（保留主体 ${Math.round(result.meta.contentRatio * 100)}%）`
+          : "";
+        toast(`去背景完成${pct}`);
+      }
       syncChrome();
     } catch (err) {
       console.error(err);
@@ -202,6 +210,13 @@ document.getElementById("btnRemoveBg").addEventListener("click", () => {
       syncChrome();
     }
   }, 40);
+});
+
+document.getElementById("btnUndoBg").addEventListener("click", () => {
+  if (stage.undoBackground()) {
+    toast("已恢复去背景前的图片");
+    syncChrome();
+  }
 });
 
 document.getElementById("btnDelete").addEventListener("click", () => {

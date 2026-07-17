@@ -1,6 +1,6 @@
 /**
  * Client-side image processing (no AI / no network).
- * - Background removal (edge flood-fill)
+ * - Background removal (border-mean flood-fill, no color creep)
  * - Document / shadow flatten
  * - Clarity enhance
  */
@@ -92,13 +92,16 @@ function boxBlur(src, out, tmp, width, height, radius) {
 
 function contrastStretch(data, lowPct = 2, highPct = 98) {
   const hist = new Uint32Array(256);
+  let counted = 0;
   for (let i = 0; i < data.length; i += 4) {
     if (data[i + 3] < 8) continue;
+    if (data[i] > 250 && data[i + 1] > 250 && data[i + 2] > 250) continue;
     hist[(luminance(data[i], data[i + 1], data[i + 2]) + 0.5) | 0]++;
+    counted++;
   }
-  const total = data.length / 4;
-  const lowTarget = (total * lowPct) / 100;
-  const highTarget = (total * highPct) / 100;
+  if (counted < 16) return;
+  const lowTarget = (counted * lowPct) / 100;
+  const highTarget = (counted * highPct) / 100;
   let acc = 0;
   let lo = 0;
   let hi = 255;
@@ -121,6 +124,7 @@ function contrastStretch(data, lowPct = 2, highPct = 98) {
   const scale = 255 / (hi - lo);
   for (let i = 0; i < data.length; i += 4) {
     if (data[i + 3] < 8) continue;
+    if (data[i] > 250 && data[i + 1] > 250 && data[i + 2] > 250) continue;
     data[i] = clamp((data[i] - lo) * scale);
     data[i + 1] = clamp((data[i + 1] - lo) * scale);
     data[i + 2] = clamp((data[i + 2] - lo) * scale);
@@ -132,36 +136,37 @@ function unsharpMask(src, blurred, amount) {
   const b = blurred.data;
   for (let i = 0; i < s.length; i += 4) {
     if (s[i + 3] < 8) continue;
+    if (s[i] > 250 && s[i + 1] > 250 && s[i + 2] > 250) continue;
     s[i] = clamp(s[i] + amount * (s[i] - b[i]));
     s[i + 1] = clamp(s[i + 1] + amount * (s[i + 1] - b[i + 1]));
     s[i + 2] = clamp(s[i + 2] + amount * (s[i + 2] - b[i + 2]));
   }
 }
 
-/** Retinex-like shadow flatten: divide by large illumination blur. */
+/** Retinex-like shadow flatten — conservative white push to avoid wiping ID faces. */
 function documentFlatten(src, bg, strength) {
   const s = src.data;
   const g = bg.data;
-  const lift = 0.55 + strength * 0.4;
-  const whitePush = 195 - strength * 45;
+  const lift = 0.45 + strength * 0.35;
+  const whitePush = 225 - strength * 25;
   for (let i = 0; i < s.length; i += 4) {
     if (s[i + 3] < 8) continue;
+    if (s[i] > 250 && s[i + 1] > 250 && s[i + 2] > 250) continue;
     const br = Math.max(g[i], 12);
     const bgc = Math.max(g[i + 1], 12);
     const bb = Math.max(g[i + 2], 12);
     let r = (s[i] / br) * 255;
     let gc = (s[i + 1] / bgc) * 255;
     let b = (s[i + 2] / bb) * 255;
-    // Extra lift in darker regions (typical soft shadows)
     const lum = luminance(s[i], s[i + 1], s[i + 2]);
-    const shadowBoost = lum < 140 ? (1 - lum / 140) * 0.35 * strength : 0;
-    const mix = Math.min(1, lift + shadowBoost);
+    const shadowBoost = lum < 120 ? (1 - lum / 120) * 0.28 * strength : 0;
+    const mix = Math.min(0.92, lift + shadowBoost);
     r = s[i] * (1 - mix) + r * mix;
     gc = s[i + 1] * (1 - mix) + gc * mix;
     b = s[i + 2] * (1 - mix) + b * mix;
     const outLum = luminance(r, gc, b);
     if (outLum > whitePush) {
-      const t = Math.min(1, (outLum - whitePush) / (255 - whitePush));
+      const t = Math.min(0.85, (outLum - whitePush) / (255 - whitePush));
       r = r + (255 - r) * t;
       gc = gc + (255 - gc) * t;
       b = b + (255 - b) * t;
@@ -172,11 +177,11 @@ function documentFlatten(src, bg, strength) {
   }
 }
 
-/** Midtone contrast (S-curve) — makes text pop more than plain stretch. */
 function midtoneContrast(data, amount) {
-  const a = amount * 0.55;
+  const a = amount * 0.45;
   for (let i = 0; i < data.length; i += 4) {
     if (data[i + 3] < 8) continue;
+    if (data[i] > 250 && data[i + 1] > 250 && data[i + 2] > 250) continue;
     for (let c = 0; c < 3; c++) {
       const x = data[i + c] / 255;
       const y = x + a * (x - 0.5) * (1 - Math.abs(x - 0.5) * 2);
@@ -185,45 +190,66 @@ function midtoneContrast(data, amount) {
   }
 }
 
-/**
- * Flood-fill from image borders to remove desk / wall background → white.
- * Then crop to content bounding box.
- * @param {CanvasImageSource} source
- * @param {{ tolerance?: number }} [opts]
- * @returns {HTMLCanvasElement}
- */
-export function removeBackground(source, opts = {}) {
-  const tolerance = opts.tolerance ?? 48;
-  const width = source.naturalWidth || source.width;
-  const height = source.naturalHeight || source.height;
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  ctx.drawImage(source, 0, 0);
-  const img = ctx.getImageData(0, 0, width, height);
-  const data = img.data;
-  const n = width * height;
-  const mask = new Uint8Array(n); // 1 = background
+function borderMean(data, width, height) {
+  const strip = Math.max(2, Math.round(Math.min(width, height) * 0.02));
+  let rs = 0;
+  let gs = 0;
+  let bs = 0;
+  let count = 0;
+  const add = (x, y) => {
+    const i = (y * width + x) * 4;
+    rs += data[i];
+    gs += data[i + 1];
+    bs += data[i + 2];
+    count++;
+  };
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (x < strip || y < strip || x >= width - strip || y >= height - strip) {
+        add(x, y);
+      }
+    }
+  }
+  return {
+    r: rs / count,
+    g: gs / count,
+    b: bs / count,
+    count,
+  };
+}
 
+/**
+ * Flood-fill against fixed border mean (prevents color creep into subject).
+ * @returns {{ mask: Uint8Array, bgCount: number }}
+ */
+function buildBgMask(data, width, height, mean, tolerance) {
+  const n = width * height;
+  const mask = new Uint8Array(n);
   const queue = new Int32Array(n);
   let qh = 0;
   let qt = 0;
+  const mr = mean.r;
+  const mg = mean.g;
+  const mb = mean.b;
 
-  const pushSeed = (x, y) => {
+  const trySeed = (x, y) => {
     const idx = y * width + x;
     if (mask[idx]) return;
+    const i = idx * 4;
+    if (colorDist(data[i], data[i + 1], data[i + 2], mr, mg, mb) > tolerance + 10) {
+      return; // edge pixel is already subject-colored — skip
+    }
     mask[idx] = 1;
     queue[qt++] = idx;
   };
 
   for (let x = 0; x < width; x++) {
-    pushSeed(x, 0);
-    pushSeed(x, height - 1);
+    trySeed(x, 0);
+    trySeed(x, height - 1);
   }
   for (let y = 0; y < height; y++) {
-    pushSeed(0, y);
-    pushSeed(width - 1, y);
+    trySeed(0, y);
+    trySeed(width - 1, y);
   }
 
   const neighbors = [
@@ -237,11 +263,6 @@ export function removeBackground(source, opts = {}) {
     const idx = queue[qh++];
     const x = idx % width;
     const y = (idx / width) | 0;
-    const i = idx * 4;
-    const r0 = data[i];
-    const g0 = data[i + 1];
-    const b0 = data[i + 2];
-
     for (const [dx, dy] of neighbors) {
       const nx = x + dx;
       const ny = y + dy;
@@ -249,47 +270,108 @@ export function removeBackground(source, opts = {}) {
       const nidx = ny * width + nx;
       if (mask[nidx]) continue;
       const ni = nidx * 4;
-      if (colorDist(r0, g0, b0, data[ni], data[ni + 1], data[ni + 2]) <= tolerance) {
+      // KEY FIX: compare to border mean, never to neighbor (no creep)
+      if (colorDist(data[ni], data[ni + 1], data[ni + 2], mr, mg, mb) <= tolerance) {
         mask[nidx] = 1;
         queue[qt++] = nidx;
       }
     }
   }
 
-  // Dilate mask 2px to eat anti-aliased fringe / soft shadow near desk
-  const dilate = new Uint8Array(mask);
-  for (let pass = 0; pass < 2; pass++) {
-    dilate.set(mask);
-    for (let y = 1; y < height - 1; y++) {
-      for (let x = 1; x < width - 1; x++) {
-        const idx = y * width + x;
-        if (mask[idx]) continue;
-        if (
-          dilate[idx - 1] ||
-          dilate[idx + 1] ||
-          dilate[idx - width] ||
-          dilate[idx + width]
-        ) {
-          // Only expand into pixels similar to nearby bg (avoid eating card)
-          const i = idx * 4;
-          let nearBg = false;
-          for (const [dx, dy] of neighbors) {
-            const nidx = (y + dy) * width + (x + dx);
-            if (!dilate[nidx]) continue;
-            const ni = nidx * 4;
-            // Use original color of bg neighbor vs current — if similar to white-bound desk, expand
-            if (colorDist(data[i], data[i + 1], data[i + 2], data[ni], data[ni + 1], data[ni + 2]) < tolerance + 12) {
-              nearBg = true;
-              break;
-            }
-          }
-          if (nearBg) mask[idx] = 1;
-        }
+  // 1px dilate only into pixels still close to border mean
+  const copy = new Uint8Array(mask);
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const idx = y * width + x;
+      if (copy[idx]) continue;
+      if (!(copy[idx - 1] || copy[idx + 1] || copy[idx - width] || copy[idx + width])) {
+        continue;
+      }
+      const i = idx * 4;
+      if (colorDist(data[i], data[i + 1], data[i + 2], mr, mg, mb) <= tolerance + 6) {
+        mask[idx] = 1;
       }
     }
   }
 
-  // Paint background white + soft feather
+  let bgCount = 0;
+  for (let i = 0; i < n; i++) if (mask[i]) bgCount++;
+  return { mask, bgCount };
+}
+
+function scoreMask(contentRatio) {
+  // Ideal: subject is a sizable island (ID/doc photos usually 15%–70%)
+  if (contentRatio < 0.08 || contentRatio > 0.9) return -1;
+  const ideal = 0.4;
+  return 1 - Math.abs(contentRatio - ideal);
+}
+
+/**
+ * Mild cleanup baked after bg remove (shadows / clarity) — conservative.
+ */
+function bakeMildCleanup(canvas) {
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  const width = canvas.width;
+  const height = canvas.height;
+  const img = ctx.getImageData(0, 0, width, height);
+  const tmp = copyImageData(img);
+  const blur = copyImageData(img);
+  const radius = Math.max(12, Math.round(Math.min(width, height) * 0.06));
+  boxBlur(img, blur, tmp, width, height, radius);
+  documentFlatten(img, blur, 0.55);
+  contrastStretch(img.data, 1.5, 99);
+  boxBlur(img, blur, tmp, width, height, 1);
+  unsharpMask(img, blur, 1.2);
+  midtoneContrast(img.data, 0.35);
+  ctx.putImageData(img, 0, 0);
+  return canvas;
+}
+
+/**
+ * Remove desk/wall background → white, crop to subject.
+ * Throws Error with code BG_REMOVE_FAILED if result would wipe the subject.
+ * @param {CanvasImageSource} source
+ * @param {{ tolerance?: number, bakeCleanup?: boolean }} [opts]
+ * @returns {HTMLCanvasElement}
+ */
+export function removeBackground(source, opts = {}) {
+  const width = source.naturalWidth || source.width;
+  const height = source.naturalHeight || source.height;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(source, 0, 0);
+  const img = ctx.getImageData(0, 0, width, height);
+  const data = img.data;
+  const n = width * height;
+  const mean = borderMean(data, width, height);
+
+  const tolerances =
+    opts.tolerance != null
+      ? [opts.tolerance]
+      : [26, 32, 38, 44, 52, 60];
+
+  let best = null;
+  for (const tol of tolerances) {
+    const { mask, bgCount } = buildBgMask(data, width, height, mean, tol);
+    const contentRatio = 1 - bgCount / n;
+    const score = scoreMask(contentRatio);
+    if (score < 0) continue;
+    if (!best || score > best.score) {
+      best = { mask, bgCount, contentRatio, score, tol };
+    }
+    // Good enough early exit
+    if (contentRatio >= 0.18 && contentRatio <= 0.65) break;
+  }
+
+  if (!best) {
+    const err = new Error("无法可靠区分主体与背景，请换光线更均匀的照片或手动裁切");
+    err.code = "BG_REMOVE_FAILED";
+    throw err;
+  }
+
+  const { mask } = best;
   for (let idx = 0; idx < n; idx++) {
     if (!mask[idx]) continue;
     const i = idx * 4;
@@ -299,7 +381,13 @@ export function removeBackground(source, opts = {}) {
     data[i + 3] = 255;
   }
 
-  // Soften remaining near-white fringe on content edge
+  // Light feather only on pixels still close to desk color
+  const neighbors = [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+  ];
   for (let y = 1; y < height - 1; y++) {
     for (let x = 1; x < width - 1; x++) {
       const idx = y * width + x;
@@ -308,20 +396,49 @@ export function removeBackground(source, opts = {}) {
       for (const [dx, dy] of neighbors) {
         if (mask[(y + dy) * width + (x + dx)]) bgN++;
       }
-      if (bgN === 0) continue;
+      if (!bgN) continue;
       const i = idx * 4;
-      const lum = luminance(data[i], data[i + 1], data[i + 2]);
-      if (lum > 170 || bgN >= 2) {
-        const t = Math.min(1, 0.35 + bgN * 0.2);
-        data[i] = clamp(data[i] + (255 - data[i]) * t);
-        data[i + 1] = clamp(data[i + 1] + (255 - data[i + 1]) * t);
-        data[i + 2] = clamp(data[i + 2] + (255 - data[i + 2]) * t);
+      if (colorDist(data[i], data[i + 1], data[i + 2], mean.r, mean.g, mean.b) > best.tol + 14) {
+        continue;
       }
+      const t = Math.min(0.7, 0.25 + bgN * 0.15);
+      data[i] = clamp(data[i] + (255 - data[i]) * t);
+      data[i + 1] = clamp(data[i + 1] + (255 - data[i + 1]) * t);
+      data[i + 2] = clamp(data[i + 2] + (255 - data[i + 2]) * t);
     }
   }
 
   ctx.putImageData(img, 0, 0);
-  return cropToContent(canvas, 8);
+  let out = cropToContent(canvas, 10);
+  // Guard: crop must keep meaningful pixels
+  if (!hasMeaningfulContent(out)) {
+    const err = new Error("去背景后主体丢失，已取消本次处理");
+    err.code = "BG_REMOVE_FAILED";
+    throw err;
+  }
+  if (opts.bakeCleanup !== false) {
+    out = bakeMildCleanup(out);
+    if (!hasMeaningfulContent(out)) {
+      // cleanup wiped it — return pre-cleanup crop
+      out = cropToContent(canvas, 10);
+    }
+  }
+  out.__bgMeta = { tolerance: best.tol, contentRatio: best.contentRatio };
+  return out;
+}
+
+function hasMeaningfulContent(sourceCanvas, minRatio = 0.02) {
+  const w = sourceCanvas.width;
+  const h = sourceCanvas.height;
+  if (w < 8 || h < 8) return false;
+  const ctx = sourceCanvas.getContext("2d", { willReadFrequently: true });
+  const { data } = ctx.getImageData(0, 0, w, h);
+  let content = 0;
+  const total = w * h;
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i] < 245 || data[i + 1] < 245 || data[i + 2] < 245) content++;
+  }
+  return content / total >= minRatio;
 }
 
 /** Crop near-white margins. */
@@ -344,7 +461,11 @@ function cropToContent(sourceCanvas, pad = 6) {
       if (y > maxY) maxY = y;
     }
   }
-  if (maxX < minX || maxY < minY) return sourceCanvas;
+  if (maxX < minX || maxY < minY) {
+    const err = new Error("去背景后未检测到主体");
+    err.code = "BG_REMOVE_FAILED";
+    throw err;
+  }
   minX = Math.max(0, minX - pad);
   minY = Math.max(0, minY - pad);
   maxX = Math.min(w - 1, maxX + pad);
@@ -383,30 +504,35 @@ export function processImage(source, options = {}) {
   const blur = copyImageData(img);
 
   if (docMode) {
-    const radius = Math.max(16, Math.round(Math.min(width, height) * 0.08));
+    const radius = Math.max(12, Math.round(Math.min(width, height) * 0.06));
     boxBlur(img, blur, tmp, width, height, radius);
-    documentFlatten(img, blur, Math.max(strength, 0.55));
-    // Second lighter pass for residual shadows
-    boxBlur(img, blur, tmp, width, height, Math.max(8, (radius / 2) | 0));
-    documentFlatten(img, blur, 0.35 + strength * 0.25);
-    contrastStretch(img.data, 1, 99.2);
-    midtoneContrast(img.data, 0.35 + strength * 0.4);
+    documentFlatten(img, blur, Math.min(0.85, Math.max(strength, 0.4)));
+    contrastStretch(img.data, 1.2, 99);
+    midtoneContrast(img.data, 0.25 + strength * 0.3);
   }
 
   if (enhance) {
-    const radius = Math.max(1, Math.round(1 + strength * 2));
+    const radius = Math.max(1, Math.round(1 + strength * 1.5));
     boxBlur(img, blur, tmp, width, height, radius);
-    unsharpMask(img, blur, 1.1 + strength * 1.8);
+    unsharpMask(img, blur, 0.9 + strength * 1.4);
     if (!docMode) {
-      contrastStretch(img.data, 0.8, 99.5);
-      midtoneContrast(img.data, 0.45 + strength * 0.5);
+      contrastStretch(img.data, 1, 99.2);
+      midtoneContrast(img.data, 0.35 + strength * 0.4);
     } else {
-      // Extra crisp on text after doc flatten
       boxBlur(img, blur, tmp, width, height, 1);
-      unsharpMask(img, blur, 0.8 + strength * 0.6);
+      unsharpMask(img, blur, 0.55 + strength * 0.45);
     }
   }
 
   ctx.putImageData(img, 0, 0);
   return canvas;
 }
+
+/** Exported for tests / tooling */
+export const __test = {
+  borderMean,
+  buildBgMask,
+  scoreMask,
+  colorDist,
+  hasMeaningfulContent,
+};

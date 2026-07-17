@@ -105,6 +105,7 @@ export class A4Stage {
         h: fit.h,
         rotation: 0,
         bgRemoved: false,
+        _backup: null,
       };
       this.items.push(item);
       this.selectedId = item.id;
@@ -257,21 +258,69 @@ export class A4Stage {
   }
 
   /**
-   * One-click background removal on selected item (mutates source pixels).
+   * One-click background removal on selected item.
+   * Keeps a backup for undo; refuses to apply if subject would be wiped.
+   * @returns {{ ok: true, meta: object } | { ok: false, message: string }}
    */
   removeSelectedBackground() {
     const it = this.selected;
-    if (!it) return false;
-    const cleaned = removeBackground(it.img, { tolerance: 50 });
-    const prevCx = it.x + it.w / 2;
-    const prevCy = it.y + it.h / 2;
-    const scale = it.w / (it.img.naturalWidth || it.img.width || it.w);
-    it.img = cleaned;
-    it.bgRemoved = true;
-    it.w = cleaned.width * scale;
-    it.h = cleaned.height * scale;
-    it.x = prevCx - it.w / 2;
-    it.y = prevCy - it.h / 2;
+    if (!it) return { ok: false, message: "请先选中一张图片" };
+
+    // Snapshot current pixels once (before first bg remove)
+    if (!it._backup) {
+      const bw = it.img.naturalWidth || it.img.width;
+      const bh = it.img.naturalHeight || it.img.height;
+      const snap = document.createElement("canvas");
+      snap.width = bw;
+      snap.height = bh;
+      snap.getContext("2d").drawImage(it.img, 0, 0);
+      it._backup = {
+        canvas: snap,
+        w: it.w,
+        h: it.h,
+        x: it.x,
+        y: it.y,
+      };
+    }
+
+    try {
+      const cleaned = removeBackground(it.img, { bakeCleanup: true });
+      const prevCx = it.x + it.w / 2;
+      const prevCy = it.y + it.h / 2;
+      const scale = it.w / (it.img.naturalWidth || it.img.width || it.w);
+      it.img = cleaned;
+      it.bgRemoved = true;
+      it.w = cleaned.width * scale;
+      it.h = cleaned.height * scale;
+      it.x = prevCx - it.w / 2;
+      it.y = prevCy - it.h / 2;
+      this._processed.delete(it.id);
+      this._flash(it);
+      this.requestRender();
+      this.onChange?.();
+      return {
+        ok: true,
+        meta: cleaned.__bgMeta || {},
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        message: err?.message || "去背景失败",
+      };
+    }
+  }
+
+  /** Restore image from before background removal. */
+  undoBackground() {
+    const it = this.selected;
+    if (!it?._backup) return false;
+    const b = it._backup;
+    it.img = b.canvas;
+    it.w = b.w;
+    it.h = b.h;
+    it.x = b.x;
+    it.y = b.y;
+    it.bgRemoved = false;
     this._processed.delete(it.id);
     this._flash(it);
     this.requestRender();

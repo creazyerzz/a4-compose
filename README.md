@@ -30,9 +30,15 @@ Open `http://127.0.0.1:5173`
 - Image processing via Canvas 2D
 - Minimal JPEG-in-PDF writer
 
-## License
+## Test
 
-MIT — see [LICENSE](LICENSE).
+```bash
+python3 scripts/test_bg_remove.py
+# optional browser selftest:
+python3 -m http.server 5173
+# open http://127.0.0.1:5173/test/bg-remove-selftest.html
+```
+
 
 ---
 

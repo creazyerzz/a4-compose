@@ -43,7 +43,10 @@
           <button type="button" id="btnRemoveBg" class="btn primary block" disabled>
             一键去除背景
           </button>
-          <p class="hint">去掉桌子、墙面等边缘背景，并自动裁切（选中图片后点击）</p>
+          <button type="button" id="btnUndoBg" class="btn block" disabled>
+            撤销去背景
+          </button>
+          <p class="hint">去掉桌子、墙面等边缘背景，并自动裁切（失败会自动取消，不破坏原图）</p>
           <label class="toggle">
             <input type="checkbox" id="optDocMode" />
             <span>证件 / 文档模式</span>
