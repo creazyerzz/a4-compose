@@ -223,6 +223,8 @@ document.getElementById("btnRemoveBg").addEventListener("click", () => {
       const result = stage.removeSelectedBackground();
       if (!result.ok) {
         toast(result.message);
+      } else if (result.recrop) {
+        toast(`已从原图重新裁切 · ${stage.preset.scanLabel}`);
       } else {
         const m = result.meta?.method === "perspective" ? "已透视拉正" : "已裁切";
         toast(`${m} · ${stage.preset.scanLabel}`);

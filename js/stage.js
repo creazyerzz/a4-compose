@@ -288,15 +288,15 @@ export class A4Stage {
   }
 
   /**
-   * One-click background removal on selected item.
-   * Keeps a backup for undo; refuses to apply if subject would be wiped.
-   * @returns {{ ok: true, meta: object } | { ok: false, message: string }}
+   * Smart crop selected item (CamScanner-style).
+   * Always runs on the ORIGINAL upload (backup) — never nest-crops a cropped result.
+   * @returns {{ ok: true, meta: object, recrop?: boolean } | { ok: false, message: string }}
    */
   removeSelectedBackground() {
     const it = this.selected;
     if (!it) return { ok: false, message: "请先选中一张图片" };
 
-    // Snapshot current pixels once (before first bg remove)
+    // Snapshot ORIGINAL pixels once; later clicks always re-crop from this
     if (!it._backup) {
       const bw = it.img.naturalWidth || it.img.width;
       const bh = it.img.naturalHeight || it.img.height;
@@ -313,14 +313,17 @@ export class A4Stage {
       };
     }
 
+    const source = it._backup.canvas;
+    const wasCropped = !!it.bgRemoved;
+
     try {
-      const cleaned = removeBackground(it.img, {
+      const cleaned = removeBackground(source, {
         targetAspect: this.preset.scanAspect,
       });
+      // Fit into first empty guide if any, else keep center
+      const guide = this._nextGuideSlot();
       const prevCx = it.x + it.w / 2;
       const prevCy = it.y + it.h / 2;
-      // Fit into first empty guide if any, else sensible default
-      const guide = this._nextGuideSlot();
       if (guide) {
         const fit = fitInside(cleaned.width, cleaned.height, guide.w, guide.h);
         it.img = cleaned;
@@ -348,6 +351,7 @@ export class A4Stage {
       this.onChange?.();
       return {
         ok: true,
+        recrop: wasCropped,
         meta: cleaned.__bgMeta || {},
       };
     } catch (err) {
