@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>debug real ID scan</title>
+    <style>
+      body {
+        font-family: ui-monospace, Menlo, sans-serif;
+        background: #111;
+        color: #eee;
+        padding: 16px;
+      }
+      .ok {
+        color: #4ade80;
+      }
+      .fail {
+        color: #f87171;
+      }
+      canvas,
+      img {
+        max-width: 360px;
+        background: #fff;
+        margin: 8px 8px 8px 0;
+        border: 1px solid #444;
+      }
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: flex-start;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Real ID fixture debug</h1>
+    <pre id="log"></pre>
+    <div class="row" id="shots"></div>
+    <script type="module">
+      import { removeBackground } from "../js/enhance.js";
+
+      const logEl = document.getElementById("log");
+      const shots = document.getElementById("shots");
+      const lines = [];
+      function log(m) {
+        lines.push(m);
+        logEl.textContent = lines.join("\n");
+      }
+      function show(label, el) {
+        const wrap = document.createElement("div");
+        const t = document.createElement("div");
+        t.textContent = label;
+        wrap.append(t, el);
+        shots.appendChild(wrap);
+      }
+
+      function loadImage(src) {
+        return new Promise((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => resolve(img);
+          img.onerror = reject;
+          img.src = src;
+        });
+      }
+
+      function variance(canvas) {
+        const { data, width: w, height: h } = canvas
+          .getContext("2d")
+          .getImageData(0, 0, canvas.width, canvas.height);
+        let s = 0;
+        let s2 = 0;
+        let n = 0;
+        for (let i = 0; i < data.length; i += 16) {
+          const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+          s += lum;
+          s2 += lum * lum;
+          n++;
+        }
+        const mean = s / n;
+        return s2 / n - mean * mean;
+      }
+
+      async function runOne(path, aspect) {
+        const img = await loadImage(path);
+        show(`input ${img.naturalWidth}x${img.naturalHeight}`, img);
+        const out = removeBackground(img, { targetAspect: aspect });
+        show(
+          `out ${out.width}x${out.height} method=${out.__bgMeta?.method} ori=${out.__bgMeta?.orientation || "?"}`,
+          out
+        );
+        const v = variance(out);
+        const ratio = out.width / out.height;
+        log(
+          `${path}\n  meta=${JSON.stringify(out.__bgMeta)}\n  variance=${v.toFixed(1)} aspect=${ratio.toFixed(3)}`
+        );
+        // Portrait ID in photo → output should be portrait-ish (~0.63) or landscape if rotated
+        const okVar = v > 100;
+        const okAspect =
+          (ratio > 0.45 && ratio < 0.85) || (ratio > 1.2 && ratio < 2.0);
+        const cropped =
+          out.width < img.naturalWidth * 0.98 || out.height < img.naturalHeight * 0.98;
+        if (!okVar || !okAspect || !cropped) {
+          log(`  FAIL quality (var/aspect/cropped=${okVar}/${okAspect}/${cropped})`);
+          logEl.className = "fail";
+          return false;
+        }
+        log("  PASS");
+        return true;
+      }
+
+      let ok = true;
+      try {
+        const idAspect = 85.6 / 54;
+        ok = (await runOne("../fixtures/身份证反面.jpg", idAspect)) && ok;
+        ok = (await runOne("../fixtures/身份证正面.jpg", idAspect)) && ok;
+      } catch (e) {
+        log("ERROR " + e.message + "\n" + e.stack);
+        ok = false;
+        logEl.className = "fail";
+      }
+      document.title = ok ? "PASS real-id" : "FAIL real-id";
+      if (ok) logEl.className = "ok";
+      log(ok ? "\nAll passed" : "\nFailed");
+    </script>
+  </body>
+</html>

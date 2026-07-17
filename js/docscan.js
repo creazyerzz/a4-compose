@@ -543,10 +543,12 @@ function detectQuadFromBlob(data, w, h) {
   bg /= bn;
   bb /= bn;
   const bgSat = satSum / bn;
+  // Wood desks are warm (R > B); ID faces are cooler / bluer
+  const bgWarm = br - bb;
 
   const fg = new Uint8Array(w * h);
-  const insetX = Math.round(w * 0.2);
-  const insetY = Math.round(h * 0.2);
+  const insetX = Math.round(w * 0.28);
+  const insetY = Math.round(h * 0.28);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const i = (y * w + x) * 4;
@@ -557,12 +559,21 @@ function detectQuadFromBlob(data, w, h) {
       const mx = Math.max(r, g, b);
       const mn = Math.min(r, g, b);
       const sat = mx === 0 ? 0 : (mx - mn) / mx;
+      const warm = r - b;
       const inCore = x >= insetX && x < w - insetX && y >= insetY && y < h - insetY;
-      const looksLikeDesk = d < 36 && Math.abs(sat - bgSat) < 0.12;
+
+      // Desk: similar color OR similarly warm wood tone
+      const looksLikeDesk =
+        (d < 40 && Math.abs(sat - bgSat) < 0.14) ||
+        (bgWarm > 20 && warm > bgWarm * 0.55 && d < 55);
+
       if (inCore) {
-        fg[y * w + x] = looksLikeDesk && d < 22 ? 0 : 1;
+        // Core is subject unless clearly desk-colored
+        fg[y * w + x] = looksLikeDesk && d < 28 ? 0 : 1;
       } else {
-        fg[y * w + x] = looksLikeDesk ? 0 : d > 40 ? 1 : 0;
+        // Prefer cooler / different-from-desk pixels as subject (ID guilloche)
+        const coolerThanDesk = bgWarm > 15 && warm < bgWarm - 8;
+        fg[y * w + x] = looksLikeDesk && !coolerThanDesk ? 0 : d > 28 || coolerThanDesk ? 1 : 0;
       }
     }
   }
@@ -784,8 +795,7 @@ function traceBlobContour(fg, w, h, insetX, insetY) {
 }
 
 /**
- * Fallback: axis-aligned tight crop using border-mean + center protection
- * (only used if quad detection fails).
+ * Fallback: warm-desk vs cooler-card crop; retry perspective via mask rect if needed.
  */
 function fallbackAxisCrop(srcCanvas, data, w, h) {
   const border = Math.max(3, Math.round(Math.min(w, h) * 0.04));
@@ -806,35 +816,80 @@ function fallbackAxisCrop(srcCanvas, data, w, h) {
   br /= bn;
   bg /= bn;
   bb /= bn;
+  const bgWarm = br - bb;
 
   const mask = new Uint8Array(w * h);
-  const insetX = Math.round(w * 0.2);
-  const insetY = Math.round(h * 0.2);
+  const insetX = Math.round(w * 0.3);
+  const insetY = Math.round(h * 0.3);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const i = (y * w + x) * 4;
-      const d = Math.hypot(data[i] - br, data[i + 1] - bg, data[i + 2] - bb);
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      const d = Math.hypot(r - br, g - bg, b - bb);
+      const warm = r - b;
+      const looksDesk = d < 38 || (bgWarm > 18 && warm > bgWarm * 0.5 && d < 60);
+      const cooler = bgWarm > 12 && warm < bgWarm - 6;
       if (x >= insetX && x < w - insetX && y >= insetY && y < h - insetY) {
-        mask[y * w + x] = 1;
+        mask[y * w + x] = looksDesk && d < 24 ? 0 : 1;
       } else {
-        mask[y * w + x] = d > 38 ? 1 : 0;
+        mask[y * w + x] = looksDesk && !cooler ? 0 : 1;
       }
     }
   }
+
   let minX = w;
   let minY = h;
   let maxX = 0;
   let maxY = 0;
+  let count = 0;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       if (!mask[y * w + x]) continue;
+      count++;
       minX = Math.min(minX, x);
       minY = Math.min(minY, y);
       maxX = Math.max(maxX, x);
       maxY = Math.max(maxY, y);
     }
   }
-  if (maxX <= minX) throw new Error("未检测到证件边缘");
+  if (maxX <= minX || count < w * h * 0.05) throw new Error("未检测到证件边缘");
+
+  const areaRatio = ((maxX - minX) * (maxY - minY)) / (w * h);
+  const contour = traceBlobContour(mask, w, h, insetX, insetY);
+  if (contour && contour.length > 40) {
+    const hull = convexHull(contour);
+    const rect = minAreaRectCorners(hull);
+    if (rect) {
+      const orderedTry = orderCorners(rect);
+      if (isStableQuad(orderedTry)) {
+        const ordered = orderCorners(shrinkQuad(orderedTry, 0.02));
+        const [tl, tr, brc, bl] = ordered;
+        let outW = Math.round(
+          (Math.hypot(tr.x - tl.x, tr.y - tl.y) + Math.hypot(brc.x - bl.x, brc.y - bl.y)) / 2
+        );
+        let outH = Math.round(
+          (Math.hypot(bl.x - tl.x, bl.y - tl.y) + Math.hypot(brc.x - tr.x, brc.y - tr.y)) / 2
+        );
+        const sized = sizeForOrientation(outW, outH, 85.6 / 54);
+        outW = Math.max(64, sized.w);
+        outH = Math.max(64, sized.h);
+        const warped = warpPerspective(data, w, h, ordered, outW, outH);
+        if (warpLooksSane(warped)) return warped;
+      }
+    }
+  }
+
+  // Axis crop — if almost full frame, shrink toward center using content density
+  if (areaRatio > 0.88) {
+    const shrink = Math.round(Math.min(w, h) * 0.08);
+    minX = Math.min(minX + shrink, insetX);
+    minY = Math.min(minY + shrink, insetY);
+    maxX = Math.max(maxX - shrink, w - insetX);
+    maxY = Math.max(maxY - shrink, h - insetY);
+  }
+
   const pad = Math.round(Math.min(w, h) * 0.01);
   minX = Math.max(0, minX - pad);
   minY = Math.max(0, minY - pad);
@@ -895,37 +950,38 @@ export function scanDocument(source, opts = {}) {
   }));
 
   const [tl0, tr0, br0, bl0] = orderCorners(srcQuad);
+  if (!isStableQuad([tl0, tr0, br0, bl0])) {
+    method = "fallback-crop";
+    const out = fallbackAxisCrop(srcCanvas, img.data, srcW, srcH);
+    out.__bgMeta = { method, reason: "unstable-quad" };
+    return out;
+  }
+
   // Inset slightly so desk fringe is not included in the warp
-  let ordered = shrinkQuad([tl0, tr0, br0, bl0], 0.025);
+  let ordered = shrinkQuad([tl0, tr0, br0, bl0], 0.02);
   ordered = orderCorners(ordered);
   const [tl, tr, br, bl] = ordered;
   const widthA = Math.hypot(tr.x - tl.x, tr.y - tl.y);
   const widthB = Math.hypot(br.x - bl.x, br.y - bl.y);
   const heightA = Math.hypot(bl.x - tl.x, bl.y - tl.y);
   const heightB = Math.hypot(br.x - tr.x, br.y - tr.y);
-  let outW = Math.round((widthA + widthB) / 2);
-  let outH = Math.round((heightA + heightB) / 2);
+  let outW = Math.max(1, Math.round((widthA + widthB) / 2));
+  let outH = Math.max(1, Math.round((heightA + heightB) / 2));
 
-  // Force output aspect from canvas preset when provided
+  // Match physical card aspect to DETECTED orientation (portrait photo ≠ force landscape!)
+  // targetAspect is physical long/short when card is "wide" (ID ≈ 1.585)
   if (targetAspect && targetAspect > 0.2 && targetAspect < 5) {
-    const long = Math.max(outW, outH);
-    if (targetAspect >= 1) {
-      outW = long;
-      outH = Math.round(long / targetAspect);
-    } else {
-      outH = long;
-      outW = Math.round(long * targetAspect);
-    }
+    const physical = targetAspect >= 1 ? targetAspect : 1 / targetAspect;
+    const sized = sizeForOrientation(outW, outH, physical);
+    outW = sized.w;
+    outH = sized.h;
   } else {
-    // Prefer ID-card-like aspect if close
     const ratio = Math.max(outW, outH) / Math.min(outW, outH);
     const idRatio = 85.6 / 54;
-    if (Math.abs(ratio - idRatio) < 0.35) {
-      if (outW >= outH) {
-        outH = Math.round(outW / idRatio);
-      } else {
-        outW = Math.round(outH / idRatio);
-      }
+    if (Math.abs(ratio - idRatio) < 0.45) {
+      const sized = sizeForOrientation(outW, outH, idRatio);
+      outW = sized.w;
+      outH = sized.h;
     }
   }
 
@@ -935,14 +991,89 @@ export function scanDocument(source, opts = {}) {
   outW = Math.max(64, Math.round(outW * outScale));
   outH = Math.max(64, Math.round(outH * outScale));
 
-  const out = warpPerspective(img.data, srcW, srcH, ordered, outW, outH);
+  let out;
+  try {
+    out = warpPerspective(img.data, srcW, srcH, ordered, outW, outH);
+    if (!warpLooksSane(out)) {
+      throw new Error("warp-quality");
+    }
+  } catch {
+    method = "fallback-crop";
+    out = fallbackAxisCrop(srcCanvas, img.data, srcW, srcH);
+    out.__bgMeta = { method, reason: "bad-warp" };
+    return out;
+  }
+
   out.__bgMeta = {
     method,
     width: outW,
     height: outH,
     ratio: outW / outH,
+    orientation: outW >= outH ? "landscape" : "portrait",
   };
   return out;
+}
+
+/** Keep detected portrait/landscape; apply physical long/short ratio. */
+function sizeForOrientation(outW, outH, physicalLongOverShort) {
+  const long = Math.max(outW, outH);
+  if (outW >= outH) {
+    return { w: Math.round(long), h: Math.max(32, Math.round(long / physicalLongOverShort)) };
+  }
+  return { w: Math.max(32, Math.round(long / physicalLongOverShort)), h: Math.round(long) };
+}
+
+function isStableQuad(quad) {
+  const area = polygonArea(quad);
+  if (area < 100) return false;
+  const sides = [];
+  for (let i = 0; i < 4; i++) {
+    const a = quad[i];
+    const b = quad[(i + 1) % 4];
+    sides.push(Math.hypot(a.x - b.x, a.y - b.y));
+  }
+  const minS = Math.min(...sides);
+  const maxS = Math.max(...sides);
+  if (minS < 8 || maxS / minS > 6) return false;
+  // Reject near-degenerate (almost collinear) quads via cross products
+  for (let i = 0; i < 4; i++) {
+    const p0 = quad[i];
+    const p1 = quad[(i + 1) % 4];
+    const p2 = quad[(i + 2) % 4];
+    const cross = (p1.x - p0.x) * (p2.y - p1.y) - (p1.y - p0.y) * (p2.x - p1.x);
+    if (Math.abs(cross) < 20) return false;
+  }
+  return true;
+}
+
+/** Reject smeared / exploded warps (common when aspect forced wrong way). */
+function warpLooksSane(canvas) {
+  const w = canvas.width;
+  const h = canvas.height;
+  if (w < 40 || h < 40) return false;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  const { data } = ctx.getImageData(0, 0, w, h);
+  // Sample a grid; expect decent color variance (ID cards aren't one smear)
+  let sum = 0;
+  let sum2 = 0;
+  let n = 0;
+  const step = Math.max(4, Math.floor(Math.min(w, h) / 40));
+  for (let y = step; y < h - step; y += step) {
+    for (let x = step; x < w - step; x += step) {
+      const i = (y * w + x) * 4;
+      const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      sum += lum;
+      sum2 += lum * lum;
+      n++;
+    }
+  }
+  if (n < 16) return false;
+  const mean = sum / n;
+  const variance = sum2 / n - mean * mean;
+  // Real ID photos have texture; exploded warps often low-variance smear OR extreme
+  if (variance < 80) return false;
+  // Corner vs center difference shouldn't be absurdly uniform white/black
+  return true;
 }
 
 export const __testDocscan = {
@@ -950,4 +1081,6 @@ export const __testDocscan = {
   scoreQuad,
   approxPolyDP,
   polygonArea,
+  sizeForOrientation,
+  isStableQuad,
 };
