@@ -92,14 +92,18 @@
         log(
           `${path}\n  meta=${JSON.stringify(out.__bgMeta)}\n  variance=${v.toFixed(1)} aspect=${ratio.toFixed(3)}`
         );
-        // Portrait ID in photo → output should be portrait-ish (~0.63) or landscape if rotated
+        // After normalize: must be landscape ID aspect, upright
         const okVar = v > 100;
-        const okAspect =
-          (ratio > 0.45 && ratio < 0.85) || (ratio > 1.2 && ratio < 2.0);
+        const okAspect = ratio > 1.25 && ratio < 2.05;
         const cropped =
-          out.width < img.naturalWidth * 0.98 || out.height < img.naturalHeight * 0.98;
-        if (!okVar || !okAspect || !cropped) {
-          log(`  FAIL quality (var/aspect/cropped=${okVar}/${okAspect}/${cropped})`);
+          out.width * out.height < img.naturalWidth * img.naturalHeight * 0.9;
+        const okLandscape = out.width > out.height;
+        // Content shouldn't be a thin strip of the card
+        const okFill = out.width > 400 && out.height > 250;
+        if (!okVar || !okAspect || !cropped || !okLandscape || !okFill) {
+          log(
+            `  FAIL quality (var/aspect/cropped/land/fill=${okVar}/${okAspect}/${cropped}/${okLandscape}/${okFill})`
+          );
           logEl.className = "fail";
           return false;
         }

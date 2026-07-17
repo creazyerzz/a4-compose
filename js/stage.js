@@ -719,12 +719,11 @@ function easeOutCubic(t) {
 
 /** Rotate portrait crop to landscape so it fills 正面/反面横槽. */
 function ensureLandscapeCard(canvas) {
-  const w = canvas.width || canvas.naturalWidth;
-  const h = canvas.height || canvas.naturalHeight;
-  if (w >= h) return canvas;
+  // Orientation already corrected in scanDocument; keep as safety net.
+  if (canvas.width >= canvas.height) return canvas;
   const out = document.createElement("canvas");
-  out.width = h;
-  out.height = w;
+  out.width = canvas.height;
+  out.height = canvas.width;
   const ctx = out.getContext("2d");
   ctx.translate(out.width, 0);
   ctx.rotate(Math.PI / 2);
