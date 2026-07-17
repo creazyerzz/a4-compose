@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>身份证 A4 排版</title>
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="header">
+        <div class="brand">
+          <h1>身份证 A4</h1>
+          <p>本地排版 · 清晰增强 · 证件模式 · 导出 PDF</p>
+        </div>
+        <div class="header-actions">
+          <button type="button" id="btnReset" class="btn ghost" title="重置布局">重置</button>
+          <button type="button" id="btnExport" class="btn primary">导出 PDF</button>
+        </div>
+      </header>
+
+      <aside class="sidebar">
+        <section class="panel">
+          <h2>上传证件</h2>
+          <label class="upload">
+            <span>正面</span>
+            <input type="file" id="fileFront" accept="image/*" />
+            <em id="nameFront">未选择</em>
+          </label>
+          <label class="upload">
+            <span>反面</span>
+            <input type="file" id="fileBack" accept="image/*" />
+            <em id="nameBack">未选择</em>
+          </label>
+        </section>
+
+        <section class="panel">
+          <h2>图像处理</h2>
+          <label class="toggle">
+            <input type="checkbox" id="optEnhance" />
+            <span>清晰度增强</span>
+          </label>
+          <p class="hint">锐化 + 对比度拉伸，让文字更清楚</p>
+          <label class="toggle">
+            <input type="checkbox" id="optDocMode" />
+            <span>证件模式</span>
+          </label>
+          <p class="hint">压白底、弱化阴影，接近扫描件效果</p>
+          <label class="slider">
+            <span>增强强度 <b id="strengthVal">60</b>%</span>
+            <input type="range" id="optStrength" min="0" max="100" value="60" />
+          </label>
+        </section>
+
+        <section class="panel">
+          <h2>画布操作</h2>
+          <p class="hint">拖动证件调整位置；滚轮缩放选中项</p>
+          <div class="btn-row">
+            <button type="button" id="btnFit" class="btn">默认排版</button>
+            <button type="button" id="btnCenter" class="btn">水平居中</button>
+          </div>
+          <label class="slider">
+            <span>导出清晰度</span>
+            <select id="optDpi">
+              <option value="150">150 DPI（较快）</option>
+              <option value="200" selected>200 DPI（推荐）</option>
+              <option value="300">300 DPI（高清）</option>
+            </select>
+          </label>
+        </section>
+
+        <section class="panel privacy">
+          <p>图片仅在本机浏览器处理，不会上传到任何服务器。</p>
+        </section>
+      </aside>
+
+      <main class="stage-wrap">
+        <div class="stage-toolbar">
+          <span id="selectionLabel">未选中</span>
+          <span class="sep"></span>
+          <span>A4 · 210×297 mm</span>
+        </div>
+        <div class="stage-scroll" id="stageScroll">
+          <canvas id="stage" width="794" height="1123"></canvas>
+        </div>
+      </main>
+    </div>
+
+    <div id="toast" class="toast" hidden></div>
+    <script type="module" src="js/main.js"></script>
+  </body>
+</html>
