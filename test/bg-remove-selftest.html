@@ -19,7 +19,8 @@
       canvas {
         background: #fff;
         margin: 8px 8px 8px 0;
-        max-width: 240px;
+        max-width: 280px;
+        border: 1px solid #333;
       }
     </style>
   </head>
@@ -33,71 +34,85 @@
       const logEl = document.getElementById("log");
       const shots = document.getElementById("shots");
       const lines = [];
-      function log(msg, cls) {
+      function log(msg) {
         lines.push(msg);
         logEl.textContent = lines.join("\n");
-        if (cls) logEl.className = cls;
       }
 
-      function makeDeskCard() {
+      /** Beige card on wood — the real failure case */
+      function makeBeigeOnWood() {
         const c = document.createElement("canvas");
-        c.width = 320;
-        c.height = 240;
+        c.width = 360;
+        c.height = 260;
         const ctx = c.getContext("2d");
         ctx.fillStyle = "#c49648";
-        ctx.fillRect(0, 0, 320, 240);
-        ctx.fillStyle = "#78bed2";
-        ctx.fillRect(64, 53, 192, 134);
-        ctx.fillStyle = "#503c32";
-        ctx.fillRect(176, 77, 61, 86);
-        ctx.fillStyle = "#1a1a1a";
-        ctx.font = "14px sans-serif";
-        ctx.fillText("ID SAMPLE", 78, 90);
+        ctx.fillRect(0, 0, 360, 260);
+        ctx.fillStyle = "#d2c3a0";
+        ctx.fillRect(65, 52, 230, 156);
+        // light bands similar to wood (great-wall-like)
+        ctx.fillStyle = "#c8af82";
+        for (let y = 72; y < 190; y += 17) {
+          ctx.fillRect(80, y, 150, 4);
+        }
+        ctx.fillStyle = "#286e46";
+        ctx.fillRect(250, 80, 35, 45);
+        ctx.fillStyle = "#222";
+        ctx.font = "16px sans-serif";
+        ctx.fillText("居民身份证", 90, 100);
+        ctx.fillText("SAMPLE", 90, 180);
         return c;
       }
 
-      function contentRatio(canvas) {
-        const { data } = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
+      function sampleInteriorNonWhite(canvas, margin = 0.2) {
+        const { width: w, height: h } = canvas;
+        const { data } = canvas.getContext("2d").getImageData(0, 0, w, h);
+        const x0 = (w * margin) | 0;
+        const y0 = (h * margin) | 0;
+        const x1 = (w * (1 - margin)) | 0;
+        const y1 = (h * (1 - margin)) | 0;
         let content = 0;
-        for (let i = 0; i < data.length; i += 4) {
-          if (data[i] < 245 || data[i + 1] < 245 || data[i + 2] < 245) content++;
+        let total = 0;
+        for (let y = y0; y < y1; y++) {
+          for (let x = x0; x < x1; x++) {
+            total++;
+            const i = (y * w + x) * 4;
+            if (data[i] < 245 || data[i + 1] < 245 || data[i + 2] < 245) content++;
+          }
         }
-        return content / (canvas.width * canvas.height);
+        return content / total;
       }
 
       function show(label, canvas) {
         const wrap = document.createElement("div");
-        wrap.innerHTML = `<div>${label}</div>`;
+        wrap.innerHTML = `<div>${label} ${canvas.width}×${canvas.height}</div>`;
         wrap.appendChild(canvas);
         shots.appendChild(wrap);
       }
 
       let failed = 0;
       try {
-        const src = makeDeskCard();
+        const src = makeBeigeOnWood();
         show("input", src);
-        const out = removeBackground(src, { bakeCleanup: true });
+        const out = removeBackground(src, { bakeCleanup: false });
         show("output", out);
-        const ratio = contentRatio(out);
-        const meta = out.__bgMeta || {};
-        log(
-          `desk+card => ${out.width}x${out.height} content=${(ratio * 100).toFixed(1)}% tol=${meta.tolerance} metaContent=${(
-            (meta.contentRatio || 0) * 100
-          ).toFixed(1)}%`
-        );
-        if (ratio < 0.15 || out.width < 40 || out.height < 40) {
-          log("FAIL: subject missing / blank", "fail");
+        const interior = sampleInteriorNonWhite(out, 0.15);
+        log(`beige-on-wood => ${out.width}x${out.height} interiorKept=${(interior * 100).toFixed(1)}%`);
+        if (interior < 0.85 || out.width < 80 || out.height < 60) {
+          log("FAIL: subject damaged or missing");
           failed++;
+          logEl.className = "fail";
         } else {
-          log("PASS: subject preserved", "ok");
+          log("PASS: interior preserved (crop + shallow edge wipe)");
+          logEl.className = "ok";
         }
       } catch (e) {
-        log("FAIL: " + e.message, "fail");
+        log("FAIL: " + e.message);
+        logEl.className = "fail";
         failed++;
       }
 
       document.title = failed ? "FAIL bg-remove" : "PASS bg-remove";
-      log(failed ? `\n${failed} failed` : "\nAll passed", failed ? "fail" : "ok");
+      log(failed ? `\n${failed} failed` : "\nAll passed");
     </script>
   </body>
 </html>

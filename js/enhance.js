@@ -1,8 +1,12 @@
 /**
  * Client-side image processing (no AI / no network).
- * - Background removal (border-mean flood-fill, no color creep)
- * - Document / shadow flatten
- * - Clarity enhance
+ *
+ * Background removal strategy (document / ID friendly):
+ * 1) Trimap: border = sure BG, center = sure FG (never eat subject core)
+ * 2) Classify unknown by desk chroma + color distance + local variance
+ * 3) Fill holes in FG, keep component touching center
+ * 4) Crop ORIGINAL pixels to subject bbox (interior untouched)
+ * 5) Shallow edge wipe only near crop borders (limited depth)
  */
 
 function clamp(v, min = 0, max = 255) {
@@ -22,6 +26,12 @@ function colorDist(r1, g1, b1, r2, g2, b2) {
   const dg = g1 - g2;
   const db = b1 - b2;
   return Math.sqrt(dr * dr + dg * dg + db * db);
+}
+
+function saturation(r, g, b) {
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  return max === 0 ? 0 : (max - min) / max;
 }
 
 /** Separable box blur into out (reuses tmp). */
@@ -143,7 +153,6 @@ function unsharpMask(src, blurred, amount) {
   }
 }
 
-/** Retinex-like shadow flatten — conservative white push to avoid wiping ID faces. */
 function documentFlatten(src, bg, strength) {
   const s = src.data;
   const g = bg.data;
@@ -190,56 +199,295 @@ function midtoneContrast(data, amount) {
   }
 }
 
-function borderMean(data, width, height) {
-  const strip = Math.max(2, Math.round(Math.min(width, height) * 0.02));
+function regionMean(data, width, height, predicate) {
   let rs = 0;
   let gs = 0;
   let bs = 0;
   let count = 0;
-  const add = (x, y) => {
-    const i = (y * width + x) * 4;
-    rs += data[i];
-    gs += data[i + 1];
-    bs += data[i + 2];
-    count++;
-  };
+  let satSum = 0;
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      if (x < strip || y < strip || x >= width - strip || y >= height - strip) {
-        add(x, y);
-      }
+      if (!predicate(x, y)) continue;
+      const i = (y * width + x) * 4;
+      rs += data[i];
+      gs += data[i + 1];
+      bs += data[i + 2];
+      satSum += saturation(data[i], data[i + 1], data[i + 2]);
+      count++;
     }
   }
+  if (!count) return { r: 128, g: 128, b: 128, sat: 0, count: 0 };
   return {
     r: rs / count,
     g: gs / count,
     b: bs / count,
+    sat: satSum / count,
     count,
   };
 }
 
+/** Local luminance variance (3x3) — desk is smooth, card text/patterns are not. */
+function buildVarianceMap(data, width, height) {
+  const out = new Float32Array(width * height);
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      let sum = 0;
+      let sum2 = 0;
+      let n = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const i = ((y + dy) * width + (x + dx)) * 4;
+          const lum = luminance(data[i], data[i + 1], data[i + 2]);
+          sum += lum;
+          sum2 += lum * lum;
+          n++;
+        }
+      }
+      const mean = sum / n;
+      out[y * width + x] = sum2 / n - mean * mean;
+    }
+  }
+  return out;
+}
+
 /**
- * Flood-fill against fixed border mean (prevents color creep into subject).
- * @returns {{ mask: Uint8Array, bgCount: number }}
+ * Build FG mask (1 = keep subject). Protects center; fills holes.
  */
-function buildBgMask(data, width, height, mean, tolerance) {
+function buildSubjectMask(data, width, height) {
   const n = width * height;
-  const mask = new Uint8Array(n);
+  const border = Math.max(4, Math.round(Math.min(width, height) * 0.06));
+  const insetX = Math.round(width * 0.22);
+  const insetY = Math.round(height * 0.22);
+
+  const bgMean = regionMean(
+    data,
+    width,
+    height,
+    (x, y) => x < border || y < border || x >= width - border || y >= height - border
+  );
+  const fgMean = regionMean(
+    data,
+    width,
+    height,
+    (x, y) => x >= insetX && x < width - insetX && y >= insetY && y < height - insetY
+  );
+
+  const variance = buildVarianceMap(data, width, height);
+  // Adaptive variance threshold from border samples
+  let vSum = 0;
+  let vCount = 0;
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      if (x < border || y < border || x >= width - border || y >= height - border) {
+        vSum += variance[y * width + x];
+        vCount++;
+      }
+    }
+  }
+  const vBorder = vCount ? vSum / vCount : 20;
+  const vThresh = Math.max(18, vBorder * 2.2);
+
+  // fg[i]=1 means SUBJECT (keep)
+  const fg = new Uint8Array(n);
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+      const i = idx * 4;
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+
+      // Sure FG: center core
+      if (x >= insetX && x < width - insetX && y >= insetY && y < height - insetY) {
+        fg[idx] = 1;
+        continue;
+      }
+
+      // Sure BG: outer strip that looks like desk (smooth + near bg mean)
+      const onBorder = x < border || y < border || x >= width - border || y >= height - border;
+      const dBg = colorDist(r, g, b, bgMean.r, bgMean.g, bgMean.b);
+      const dFg = colorDist(r, g, b, fgMean.r, fgMean.g, fgMean.b);
+      const sat = saturation(r, g, b);
+      const vari = variance[idx];
+
+      if (onBorder && dBg < 55 && vari < vThresh * 1.5) {
+        fg[idx] = 0;
+        continue;
+      }
+
+      // Unknown: prefer subject when patterned, or closer to FG / less saturated than desk
+      let subjectScore = 0;
+      if (dFg + 8 < dBg) subjectScore += 2;
+      if (dBg > 42) subjectScore += 1;
+      if (vari > vThresh) subjectScore += 2;
+      if (bgMean.sat > 0.12 && sat + 0.06 < bgMean.sat) subjectScore += 1; // less vivid than wood
+      if (dBg < 28 && vari < vThresh * 0.8) subjectScore -= 2;
+
+      fg[idx] = subjectScore >= 1 ? 1 : 0;
+    }
+  }
+
+  // Force center sure FG again after classification
+  for (let y = insetY; y < height - insetY; y++) {
+    for (let x = insetX; x < width - insetX; x++) {
+      fg[y * width + x] = 1;
+    }
+  }
+
+  // Keep only FG components that touch the center region (drop desk islands)
+  const keep = largestComponentsTouching(
+    fg,
+    width,
+    height,
+    (x, y) => x >= insetX && x < width - insetX && y >= insetY && y < height - insetY
+  );
+  fg.set(keep);
+
+  // Fill holes: BG islands not connected to image border → subject
+  fillInteriorHoles(fg, width, height);
+
+  return { fg, bgMean, fgMean };
+}
+
+/** BFS keep FG components that touch the center predicate. */
+function largestComponentsTouching(fg, width, height, touchesCenter) {
+  const n = width * height;
+  const out = new Uint8Array(n);
+  const seen = new Uint8Array(n);
+  const queue = new Int32Array(n);
+  const neighbors = [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+  ];
+
+  for (let start = 0; start < n; start++) {
+    if (!fg[start] || seen[start]) continue;
+    let qh = 0;
+    let qt = 0;
+    queue[qt++] = start;
+    seen[start] = 1;
+    const comp = [];
+    let hitCenter = false;
+    while (qh < qt) {
+      const idx = queue[qh++];
+      comp.push(idx);
+      const x = idx % width;
+      const y = (idx / width) | 0;
+      if (touchesCenter(x, y)) hitCenter = true;
+      for (const [dx, dy] of neighbors) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+        const nidx = ny * width + nx;
+        if (seen[nidx] || !fg[nidx]) continue;
+        seen[nidx] = 1;
+        queue[qt++] = nidx;
+      }
+    }
+    if (hitCenter) {
+      for (const idx of comp) out[idx] = 1;
+    }
+  }
+  return out;
+}
+
+/** Any non-FG region not reachable from border becomes FG (protect card patterns). */
+function fillInteriorHoles(fg, width, height) {
+  const n = width * height;
+  const reachableBg = new Uint8Array(n);
   const queue = new Int32Array(n);
   let qh = 0;
   let qt = 0;
-  const mr = mean.r;
-  const mg = mean.g;
-  const mb = mean.b;
+  const neighbors = [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+  ];
+
+  const push = (x, y) => {
+    const idx = y * width + x;
+    if (fg[idx] || reachableBg[idx]) return;
+    reachableBg[idx] = 1;
+    queue[qt++] = idx;
+  };
+
+  for (let x = 0; x < width; x++) {
+    push(x, 0);
+    push(x, height - 1);
+  }
+  for (let y = 0; y < height; y++) {
+    push(0, y);
+    push(width - 1, y);
+  }
+
+  while (qh < qt) {
+    const idx = queue[qh++];
+    const x = idx % width;
+    const y = (idx / width) | 0;
+    for (const [dx, dy] of neighbors) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+      push(nx, ny);
+    }
+  }
+
+  for (let i = 0; i < n; i++) {
+    if (!fg[i] && !reachableBg[i]) fg[i] = 1;
+  }
+}
+
+function maskBoundingBox(fg, width, height) {
+  let minX = width;
+  let minY = height;
+  let maxX = 0;
+  let maxY = 0;
+  let count = 0;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (!fg[y * width + x]) continue;
+      count++;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+  }
+  if (!count) return null;
+  return { minX, minY, maxX, maxY, count };
+}
+
+/**
+ * Only wipe desk pixels near the crop edge, limited depth — never deep into subject.
+ */
+function shallowEdgeWipe(canvas, bgMean, maxDepthRatio = 0.1) {
+  const width = canvas.width;
+  const height = canvas.height;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  const img = ctx.getImageData(0, 0, width, height);
+  const data = img.data;
+  const n = width * height;
+  const maxDepth = Math.max(6, Math.round(Math.min(width, height) * maxDepthRatio));
+  const mask = new Uint8Array(n); // 1 = wipe
+  const depth = new Int16Array(n);
+  depth.fill(-1);
+  const queue = new Int32Array(n);
+  let qh = 0;
+  let qt = 0;
 
   const trySeed = (x, y) => {
     const idx = y * width + x;
-    if (mask[idx]) return;
     const i = idx * 4;
-    if (colorDist(data[i], data[i + 1], data[i + 2], mr, mg, mb) > tolerance + 10) {
-      return; // edge pixel is already subject-colored — skip
+    if (colorDist(data[i], data[i + 1], data[i + 2], bgMean.r, bgMean.g, bgMean.b) > 40) {
+      return;
     }
+    // Prefer wiping smoother / more saturated wood-like pixels
     mask[idx] = 1;
+    depth[idx] = 0;
     queue[qt++] = idx;
   };
 
@@ -258,11 +506,13 @@ function buildBgMask(data, width, height, mean, tolerance) {
     [0, 1],
     [0, -1],
   ];
-
   while (qh < qt) {
     const idx = queue[qh++];
     const x = idx % width;
     const y = (idx / width) | 0;
+    const d0 = depth[idx];
+    if (d0 >= maxDepth) continue;
+    const i0 = idx * 4;
     for (const [dx, dy] of neighbors) {
       const nx = x + dx;
       const ny = y + dy;
@@ -270,45 +520,95 @@ function buildBgMask(data, width, height, mean, tolerance) {
       const nidx = ny * width + nx;
       if (mask[nidx]) continue;
       const ni = nidx * 4;
-      // KEY FIX: compare to border mean, never to neighbor (no creep)
-      if (colorDist(data[ni], data[ni + 1], data[ni + 2], mr, mg, mb) <= tolerance) {
-        mask[nidx] = 1;
-        queue[qt++] = nidx;
-      }
-    }
-  }
-
-  // 1px dilate only into pixels still close to border mean
-  const copy = new Uint8Array(mask);
-  for (let y = 1; y < height - 1; y++) {
-    for (let x = 1; x < width - 1; x++) {
-      const idx = y * width + x;
-      if (copy[idx]) continue;
-      if (!(copy[idx - 1] || copy[idx + 1] || copy[idx - width] || copy[idx + width])) {
+      if (colorDist(data[ni], data[ni + 1], data[ni + 2], bgMean.r, bgMean.g, bgMean.b) > 36) {
         continue;
       }
-      const i = idx * 4;
-      if (colorDist(data[i], data[i + 1], data[i + 2], mr, mg, mb) <= tolerance + 6) {
-        mask[idx] = 1;
+      // Stop if clearly different from local seed (protect printed patterns)
+      if (colorDist(data[ni], data[ni + 1], data[ni + 2], data[i0], data[i0 + 1], data[i0 + 2]) > 28) {
+        continue;
       }
+      mask[nidx] = 1;
+      depth[nidx] = d0 + 1;
+      queue[qt++] = nidx;
     }
   }
 
-  let bgCount = 0;
-  for (let i = 0; i < n; i++) if (mask[i]) bgCount++;
-  return { mask, bgCount };
-}
-
-function scoreMask(contentRatio) {
-  // Ideal: subject is a sizable island (ID/doc photos usually 15%–70%)
-  if (contentRatio < 0.08 || contentRatio > 0.9) return -1;
-  const ideal = 0.4;
-  return 1 - Math.abs(contentRatio - ideal);
+  for (let idx = 0; idx < n; idx++) {
+    if (!mask[idx]) continue;
+    const i = idx * 4;
+    data[i] = 255;
+    data[i + 1] = 255;
+    data[i + 2] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  return canvas;
 }
 
 /**
- * Mild cleanup baked after bg remove (shadows / clarity) — conservative.
+ * Remove desk/wall background for documents/IDs without destroying subject interior.
+ * @param {CanvasImageSource} source
+ * @param {{ bakeCleanup?: boolean }} [opts]
+ * @returns {HTMLCanvasElement}
  */
+export function removeBackground(source, opts = {}) {
+  const width = source.naturalWidth || source.width;
+  const height = source.naturalHeight || source.height;
+  const srcCanvas = document.createElement("canvas");
+  srcCanvas.width = width;
+  srcCanvas.height = height;
+  const srcCtx = srcCanvas.getContext("2d", { willReadFrequently: true });
+  srcCtx.drawImage(source, 0, 0);
+  const img = srcCtx.getImageData(0, 0, width, height);
+  const data = img.data;
+  const n = width * height;
+
+  const { fg, bgMean } = buildSubjectMask(data, width, height);
+  const box = maskBoundingBox(fg, width, height);
+  if (!box) {
+    const err = new Error("未检测到可保留的主体");
+    err.code = "BG_REMOVE_FAILED";
+    throw err;
+  }
+
+  const contentRatio = box.count / n;
+  if (contentRatio < 0.08 || contentRatio > 0.95) {
+    const err = new Error("主体占比异常，已取消去背景以免损坏图片");
+    err.code = "BG_REMOVE_FAILED";
+    throw err;
+  }
+
+  const pad = Math.max(4, Math.round(Math.min(width, height) * 0.012));
+  const minX = Math.max(0, box.minX - pad);
+  const minY = Math.max(0, box.minY - pad);
+  const maxX = Math.min(width - 1, box.maxX + pad);
+  const maxY = Math.min(height - 1, box.maxY + pad);
+  const cw = maxX - minX + 1;
+  const ch = maxY - minY + 1;
+
+  // Crop ORIGINAL pixels — do not paint inside the card
+  const out = document.createElement("canvas");
+  out.width = cw;
+  out.height = ch;
+  out.getContext("2d").drawImage(srcCanvas, minX, minY, cw, ch, 0, 0, cw, ch);
+
+  // Only clean leftover desk near the new edges
+  shallowEdgeWipe(out, bgMean, 0.08);
+
+  if (!hasMeaningfulContent(out, 0.08)) {
+    const err = new Error("去背景后主体丢失，已取消本次处理");
+    err.code = "BG_REMOVE_FAILED";
+    throw err;
+  }
+
+  // Default: no heavy bake — interior already preserved
+  if (opts.bakeCleanup === true) {
+    bakeMildCleanup(out);
+  }
+
+  out.__bgMeta = { contentRatio, width: cw, height: ch };
+  return out;
+}
+
 function bakeMildCleanup(canvas) {
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
   const width = canvas.width;
@@ -316,115 +616,13 @@ function bakeMildCleanup(canvas) {
   const img = ctx.getImageData(0, 0, width, height);
   const tmp = copyImageData(img);
   const blur = copyImageData(img);
-  const radius = Math.max(12, Math.round(Math.min(width, height) * 0.06));
+  const radius = Math.max(10, Math.round(Math.min(width, height) * 0.05));
   boxBlur(img, blur, tmp, width, height, radius);
-  documentFlatten(img, blur, 0.55);
-  contrastStretch(img.data, 1.5, 99);
+  documentFlatten(img, blur, 0.4);
   boxBlur(img, blur, tmp, width, height, 1);
-  unsharpMask(img, blur, 1.2);
-  midtoneContrast(img.data, 0.35);
+  unsharpMask(img, blur, 0.9);
   ctx.putImageData(img, 0, 0);
   return canvas;
-}
-
-/**
- * Remove desk/wall background → white, crop to subject.
- * Throws Error with code BG_REMOVE_FAILED if result would wipe the subject.
- * @param {CanvasImageSource} source
- * @param {{ tolerance?: number, bakeCleanup?: boolean }} [opts]
- * @returns {HTMLCanvasElement}
- */
-export function removeBackground(source, opts = {}) {
-  const width = source.naturalWidth || source.width;
-  const height = source.naturalHeight || source.height;
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  ctx.drawImage(source, 0, 0);
-  const img = ctx.getImageData(0, 0, width, height);
-  const data = img.data;
-  const n = width * height;
-  const mean = borderMean(data, width, height);
-
-  const tolerances =
-    opts.tolerance != null
-      ? [opts.tolerance]
-      : [26, 32, 38, 44, 52, 60];
-
-  let best = null;
-  for (const tol of tolerances) {
-    const { mask, bgCount } = buildBgMask(data, width, height, mean, tol);
-    const contentRatio = 1 - bgCount / n;
-    const score = scoreMask(contentRatio);
-    if (score < 0) continue;
-    if (!best || score > best.score) {
-      best = { mask, bgCount, contentRatio, score, tol };
-    }
-    // Good enough early exit
-    if (contentRatio >= 0.18 && contentRatio <= 0.65) break;
-  }
-
-  if (!best) {
-    const err = new Error("无法可靠区分主体与背景，请换光线更均匀的照片或手动裁切");
-    err.code = "BG_REMOVE_FAILED";
-    throw err;
-  }
-
-  const { mask } = best;
-  for (let idx = 0; idx < n; idx++) {
-    if (!mask[idx]) continue;
-    const i = idx * 4;
-    data[i] = 255;
-    data[i + 1] = 255;
-    data[i + 2] = 255;
-    data[i + 3] = 255;
-  }
-
-  // Light feather only on pixels still close to desk color
-  const neighbors = [
-    [1, 0],
-    [-1, 0],
-    [0, 1],
-    [0, -1],
-  ];
-  for (let y = 1; y < height - 1; y++) {
-    for (let x = 1; x < width - 1; x++) {
-      const idx = y * width + x;
-      if (mask[idx]) continue;
-      let bgN = 0;
-      for (const [dx, dy] of neighbors) {
-        if (mask[(y + dy) * width + (x + dx)]) bgN++;
-      }
-      if (!bgN) continue;
-      const i = idx * 4;
-      if (colorDist(data[i], data[i + 1], data[i + 2], mean.r, mean.g, mean.b) > best.tol + 14) {
-        continue;
-      }
-      const t = Math.min(0.7, 0.25 + bgN * 0.15);
-      data[i] = clamp(data[i] + (255 - data[i]) * t);
-      data[i + 1] = clamp(data[i + 1] + (255 - data[i + 1]) * t);
-      data[i + 2] = clamp(data[i + 2] + (255 - data[i + 2]) * t);
-    }
-  }
-
-  ctx.putImageData(img, 0, 0);
-  let out = cropToContent(canvas, 10);
-  // Guard: crop must keep meaningful pixels
-  if (!hasMeaningfulContent(out)) {
-    const err = new Error("去背景后主体丢失，已取消本次处理");
-    err.code = "BG_REMOVE_FAILED";
-    throw err;
-  }
-  if (opts.bakeCleanup !== false) {
-    out = bakeMildCleanup(out);
-    if (!hasMeaningfulContent(out)) {
-      // cleanup wiped it — return pre-cleanup crop
-      out = cropToContent(canvas, 10);
-    }
-  }
-  out.__bgMeta = { tolerance: best.tol, contentRatio: best.contentRatio };
-  return out;
 }
 
 function hasMeaningfulContent(sourceCanvas, minRatio = 0.02) {
@@ -439,44 +637,6 @@ function hasMeaningfulContent(sourceCanvas, minRatio = 0.02) {
     if (data[i] < 245 || data[i + 1] < 245 || data[i + 2] < 245) content++;
   }
   return content / total >= minRatio;
-}
-
-/** Crop near-white margins. */
-function cropToContent(sourceCanvas, pad = 6) {
-  const w = sourceCanvas.width;
-  const h = sourceCanvas.height;
-  const ctx = sourceCanvas.getContext("2d", { willReadFrequently: true });
-  const { data } = ctx.getImageData(0, 0, w, h);
-  let minX = w;
-  let minY = h;
-  let maxX = 0;
-  let maxY = 0;
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const i = (y * w + x) * 4;
-      if (data[i] > 248 && data[i + 1] > 248 && data[i + 2] > 248) continue;
-      if (x < minX) minX = x;
-      if (y < minY) minY = y;
-      if (x > maxX) maxX = x;
-      if (y > maxY) maxY = y;
-    }
-  }
-  if (maxX < minX || maxY < minY) {
-    const err = new Error("去背景后未检测到主体");
-    err.code = "BG_REMOVE_FAILED";
-    throw err;
-  }
-  minX = Math.max(0, minX - pad);
-  minY = Math.max(0, minY - pad);
-  maxX = Math.min(w - 1, maxX + pad);
-  maxY = Math.min(h - 1, maxY + pad);
-  const cw = maxX - minX + 1;
-  const ch = maxY - minY + 1;
-  const out = document.createElement("canvas");
-  out.width = cw;
-  out.height = ch;
-  out.getContext("2d").drawImage(sourceCanvas, minX, minY, cw, ch, 0, 0, cw, ch);
-  return out;
 }
 
 /**
@@ -527,12 +687,3 @@ export function processImage(source, options = {}) {
   ctx.putImageData(img, 0, 0);
   return canvas;
 }
-
-/** Exported for tests / tooling */
-export const __test = {
-  borderMean,
-  buildBgMask,
-  scoreMask,
-  colorDist,
-  hasMeaningfulContent,
-};

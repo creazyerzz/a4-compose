@@ -284,7 +284,7 @@ export class A4Stage {
     }
 
     try {
-      const cleaned = removeBackground(it.img, { bakeCleanup: true });
+      const cleaned = removeBackground(it.img, { bakeCleanup: false });
       const prevCx = it.x + it.w / 2;
       const prevCy = it.y + it.h / 2;
       const scale = it.w / (it.img.naturalWidth || it.img.width || it.w);
