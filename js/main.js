@@ -51,7 +51,7 @@ function renderLayerList() {
     const name = document.createElement("span");
     name.className = "name";
     const slot = labels[i] || `图${i + 1}`;
-    name.textContent = it.bgRemoved ? `${slot} · 已裁切` : `${slot} · ${it.name}`;
+    name.textContent = it.bgRemoved ? `${slot} · 扫描件` : `${slot} · ${it.name}`;
     name.title = it.name;
     li.append(thumb, name);
     li.addEventListener("click", () => stage.select(it.id));
@@ -75,11 +75,11 @@ async function addFiles(fileList) {
     }
     stage.autoLayout();
     syncChrome();
-    toast("正在智能扫描裁切…");
+    toast("正在生成扫描件…");
     await new Promise((r) => setTimeout(r, 40));
     const result = stage.cropAllToSlots();
-    if (!result.ok) toast(result.message || "裁切失败，可点「一键裁切」重试");
-    else toast(`已扫描增强 ${result.done} 张（正反面）`);
+    if (!result.ok) toast(result.message || "扫描失败，可点「一键生成扫描件」重试");
+    else toast(`已生成 ${result.done} 张扫描件（正反面）`);
     syncChrome();
   } catch {
     toast("图片读取失败");
@@ -121,12 +121,12 @@ document.getElementById("btnRemoveBg").addEventListener("click", () => {
   }
   const btn = document.getElementById("btnRemoveBg");
   btn.disabled = true;
-  btn.textContent = "裁切中…";
+    btn.textContent = "生成中…";
   setTimeout(() => {
     const result = stage.removeSelectedBackground();
     if (!result.ok) toast(result.message);
-    else toast(result.recrop ? "已从原图重新裁切并填入槽位" : "已裁切并填入槽位");
-    btn.textContent = "裁切选中到槽位";
+    else toast(result.recrop ? "已重新生成扫描件" : "已生成扫描件并填入槽位");
+    btn.textContent = "生成选中扫描件";
     syncChrome();
   }, 40);
 });
@@ -138,13 +138,13 @@ document.getElementById("btnCropAll").addEventListener("click", () => {
   }
   const btn = document.getElementById("btnCropAll");
   btn.disabled = true;
-  btn.textContent = "处理中…";
+  btn.textContent = "生成中…";
   setTimeout(() => {
     const result = stage.cropAllToSlots();
     if (!result.ok) toast(result.message);
-    else toast(`已扫描增强 ${result.done} 张并排入正反面`);
+    else toast(`已生成 ${result.done} 张扫描件并排入正反面`);
     btn.disabled = false;
-    btn.textContent = "一键扫描裁切并排版";
+    btn.textContent = "一键生成扫描件并排版";
     syncChrome();
   }, 40);
 });

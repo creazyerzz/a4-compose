@@ -1,7 +1,7 @@
 /**
  * Client-side image processing (no AI / no network).
  * - Document scan (CamScanner-style) via docscan.js
- * - Clarity enhance + document shadow flatten for live filters
+ * - 扫描件后处理：纸面白底、去阴影、文字清晰、保护人像
  */
 
 import { scanDocument } from "./docscan.js";
@@ -16,6 +16,12 @@ function copyImageData(src) {
 
 function luminance(r, g, b) {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function saturation(r, g, b) {
+  const mx = Math.max(r, g, b);
+  const mn = Math.min(r, g, b);
+  return mx === 0 ? 0 : (mx - mn) / mx;
 }
 
 function boxBlur(src, out, tmp, width, height, radius) {
@@ -88,7 +94,6 @@ function contrastStretch(data, lowPct = 2, highPct = 98) {
   let counted = 0;
   for (let i = 0; i < data.length; i += 4) {
     if (data[i + 3] < 8) continue;
-    if (data[i] > 250 && data[i + 1] > 250 && data[i + 2] > 250) continue;
     hist[(luminance(data[i], data[i + 1], data[i + 2]) + 0.5) | 0]++;
     counted++;
   }
@@ -117,33 +122,32 @@ function contrastStretch(data, lowPct = 2, highPct = 98) {
   const scale = 255 / (hi - lo);
   for (let i = 0; i < data.length; i += 4) {
     if (data[i + 3] < 8) continue;
-    if (data[i] > 250 && data[i + 1] > 250 && data[i + 2] > 250) continue;
     data[i] = clamp((data[i] - lo) * scale);
     data[i + 1] = clamp((data[i + 1] - lo) * scale);
     data[i + 2] = clamp((data[i + 2] - lo) * scale);
   }
 }
 
-function unsharpMask(src, blurred, amount) {
+function unsharpMask(src, blurred, amount, mask) {
   const s = src.data;
   const b = blurred.data;
-  for (let i = 0; i < s.length; i += 4) {
+  for (let i = 0, p = 0; i < s.length; i += 4, p++) {
     if (s[i + 3] < 8) continue;
-    if (s[i] > 250 && s[i + 1] > 250 && s[i + 2] > 250) continue;
-    s[i] = clamp(s[i] + amount * (s[i] - b[i]));
-    s[i + 1] = clamp(s[i + 1] + amount * (s[i + 1] - b[i + 1]));
-    s[i + 2] = clamp(s[i + 2] + amount * (s[i + 2] - b[i + 2]));
+    if (mask && mask[p] < 0.25) continue;
+    const a = mask ? amount * mask[p] : amount;
+    s[i] = clamp(s[i] + a * (s[i] - b[i]));
+    s[i + 1] = clamp(s[i + 1] + a * (s[i + 1] - b[i + 1]));
+    s[i + 2] = clamp(s[i + 2] + a * (s[i + 2] - b[i + 2]));
   }
 }
 
-function documentFlatten(src, bg, strength) {
+function documentFlatten(src, bg, strength, paperMask) {
   const s = src.data;
   const g = bg.data;
-  const lift = 0.42 + strength * 0.32;
-  const whitePush = 218 - strength * 12;
-  for (let i = 0; i < s.length; i += 4) {
+  const lift = 0.5 + strength * 0.35;
+  for (let i = 0, p = 0; i < s.length; i += 4, p++) {
     if (s[i + 3] < 8) continue;
-    if (s[i] > 250 && s[i + 1] > 250 && s[i + 2] > 250) continue;
+    const paper = paperMask ? paperMask[p] : 1;
     const br = Math.max(g[i], 12);
     const bgc = Math.max(g[i + 1], 12);
     const bb = Math.max(g[i + 2], 12);
@@ -151,75 +155,170 @@ function documentFlatten(src, bg, strength) {
     let gc = (s[i + 1] / bgc) * 255;
     let b = (s[i + 2] / bb) * 255;
     const lum = luminance(s[i], s[i + 1], s[i + 2]);
-    // Protect dark photo / ink regions from over-bleach
-    const protect = lum < 85 ? 0.35 : lum < 120 ? 0.15 : 0;
-    const shadowBoost = lum < 140 ? (1 - lum / 140) * 0.22 * strength : 0;
-    const mix = Math.min(0.85, lift + shadowBoost) * (1 - protect);
-    r = s[i] * (1 - mix) + r * mix;
-    gc = s[i + 1] * (1 - mix) + gc * mix;
-    b = s[i + 2] * (1 - mix) + b * mix;
-    const outLum = luminance(r, gc, b);
-    if (outLum > whitePush && lum > 100) {
-      const t = Math.min(0.7, (outLum - whitePush) / (255 - whitePush));
-      r = r + (255 - r) * t;
-      gc = gc + (255 - gc) * t;
-      b = b + (255 - b) * t;
-    }
+    const mix = Math.min(0.92, lift) * (0.25 + 0.75 * paper);
+    // Dark ink / photo: much lighter flatten
+    const darkGuard = lum < 90 ? 0.3 : lum < 130 ? 0.6 : 1;
+    const m = mix * darkGuard;
+    r = s[i] * (1 - m) + r * m;
+    gc = s[i + 1] * (1 - m) + gc * m;
+    b = s[i + 2] * (1 - m) + b * m;
     s[i] = clamp(r);
     s[i + 1] = clamp(gc);
     s[i + 2] = clamp(b);
   }
 }
 
-function midtoneContrast(data, amount) {
+function midtoneContrast(data, amount, paperMask) {
   const a = amount * 0.45;
-  for (let i = 0; i < data.length; i += 4) {
+  for (let i = 0, p = 0; i < data.length; i += 4, p++) {
     if (data[i + 3] < 8) continue;
-    if (data[i] > 250 && data[i + 1] > 250 && data[i + 2] > 250) continue;
+    const w = paperMask ? 0.35 + 0.65 * paperMask[p] : 1;
     for (let c = 0; c < 3; c++) {
       const x = data[i + c] / 255;
-      const y = x + a * (x - 0.5) * (1 - Math.abs(x - 0.5) * 2);
+      const y = x + a * w * (x - 0.5) * (1 - Math.abs(x - 0.5) * 2);
       data[i + c] = clamp(y * 255);
     }
   }
 }
 
 /**
- * CamScanner-style: detect document corners → perspective warp → scan enhance.
- * Keeps interior pixels intact (no color flood-fill eating patterns).
+ * Classify pixels: paper (whitened) vs photo/ink (protected).
+ * Returns Float32Array weight in [0,1] — 1 = paper-like.
+ */
+function buildPaperMask(data, w, h) {
+  const n = w * h;
+  const mask = new Float32Array(n);
+  for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    const lum = luminance(r, g, b);
+    const sat = saturation(r, g, b);
+    // Skin / portrait tones
+    const skin =
+      r > 80 &&
+      g > 40 &&
+      b > 20 &&
+      r >= g - 8 &&
+      r - b > 10 &&
+      Math.abs(r - g) < 75 &&
+      lum > 45 &&
+      lum < 220;
+    // Emblem red / strong chroma
+    const vivid = sat > 0.35 && lum > 40 && lum < 220;
+    // Ink / dark text
+    const ink = lum < 78;
+    // Photo-ish dark block (hair/shirt)
+    const photoDark = lum < 110 && sat < 0.25 && lum > 20;
+
+    if (skin || vivid) {
+      mask[p] = 0.05;
+    } else if (ink || photoDark) {
+      mask[p] = 0.15;
+    } else if (lum > 155 && sat < 0.22) {
+      mask[p] = 1; // clear paper
+    } else if (lum > 135 && sat < 0.3) {
+      mask[p] = 0.75; // guilloche / light tint
+    } else if (lum > 120 && sat < 0.35) {
+      mask[p] = 0.45;
+    } else {
+      mask[p] = 0.25;
+    }
+  }
+  // Soften mask edges (3x3 box)
+  const out = new Float32Array(n);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let s = 0;
+      let c = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx;
+          const yy = y + dy;
+          if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+          s += mask[yy * w + xx];
+          c++;
+        }
+      }
+      out[y * w + x] = s / c;
+    }
+  }
+  return out;
+}
+
+/**
+ * 扫描件纸面：提白、去色偏；文字略压黑；人像基本不动。
+ */
+function applyScanLook(data, paperMask) {
+  for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+    if (data[i + 3] < 8) continue;
+    let r = data[i];
+    let g = data[i + 1];
+    let b = data[i + 2];
+    const lum = luminance(r, g, b);
+    const paper = paperMask[p];
+
+    // Paper → scanner white (~248)
+    if (paper > 0.4 && lum > 115) {
+      const t = Math.min(1, (paper - 0.4) / 0.6) * Math.min(1, (lum - 115) / 80);
+      const target = 248;
+      r = r + (target - r) * t * 0.85;
+      g = g + (target - g) * t * 0.85;
+      b = b + (target - b) * t * 0.85;
+      // Kill residual warm cast on paper
+      const avg = (r + g + b) / 3;
+      r = r + (avg - r) * t * 0.55;
+      g = g + (avg - g) * t * 0.55;
+      b = b + (avg - b) * t * 0.55;
+    }
+
+    // Ink → cleaner black (skip when in photo region)
+    if (paper > 0.35 && lum < 95) {
+      const t = (1 - lum / 95) * 0.35 * paper;
+      r *= 1 - t;
+      g *= 1 - t;
+      b *= 1 - t;
+    }
+
+    data[i] = clamp(r);
+    data[i + 1] = clamp(g);
+    data[i + 2] = clamp(b);
+  }
+}
+
+function ensureScanResolution(canvas, minW = 1400) {
+  const w = canvas.width;
+  const h = canvas.height;
+  if (w >= minW) return canvas;
+  const scale = minW / w;
+  const out = document.createElement("canvas");
+  out.width = Math.round(w * scale);
+  out.height = Math.round(h * scale);
+  const ctx = out.getContext("2d");
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(canvas, 0, 0, out.width, out.height);
+  if (canvas.__bgMeta) out.__bgMeta = { ...canvas.__bgMeta };
+  return out;
+}
+
+/**
+ * Crop → 扫描件：边缘裁切后的证件做成接近复印店/扫描王效果。
  */
 export function removeBackground(source, opts = {}) {
   let out = scanDocument(source, opts);
   if (opts.enhance === false) return out;
   const meta = out.__bgMeta || {};
-  out = scanEnhance(out, opts.scanStrength ?? 0.58);
-  out.__bgMeta = { ...meta, scanEnhanced: true };
+  out = ensureScanResolution(out, opts.minWidth ?? 1400);
+  out = toScanDocument(out);
+  out.__bgMeta = { ...meta, scanEnhanced: true, scanLook: true };
   return out;
 }
 
 /**
- * Photocopy / 全能扫描王 style: flatten shadows, whiten paper, punch text.
- * @param {CanvasImageSource} source
- * @param {number} [strength] 0–1
+ * 扫描件模式（彩色证件）：去阴影、纸面白、文字实、人像保留。
  */
-export function scanEnhance(source, strength = 0.58) {
-  const s = Math.min(1, Math.max(0.3, strength));
-  return processImage(source, {
-    enhance: true,
-    docMode: true,
-    strength: Math.round(42 + s * 28),
-  });
-}
-
-/**
- * @param {CanvasImageSource} source
- * @param {{ enhance?: boolean, docMode?: boolean, strength?: number }} options
- */
-export function processImage(source, options = {}) {
-  const enhance = !!options.enhance;
-  const docMode = !!options.docMode;
-  const strength = Math.min(1, Math.max(0, (options.strength ?? 60) / 100));
-
+export function toScanDocument(source) {
   const width = source.naturalWidth || source.width;
   const height = source.naturalHeight || source.height;
   const canvas = document.createElement("canvas");
@@ -228,98 +327,66 @@ export function processImage(source, options = {}) {
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
   ctx.drawImage(source, 0, 0);
 
-  if (!enhance && !docMode) return canvas;
-
   let img = ctx.getImageData(0, 0, width, height);
   const tmp = copyImageData(img);
   const blur = copyImageData(img);
+  const paperMask = buildPaperMask(img.data, width, height);
 
-  if (docMode) {
-    // Soft CamScanner-like: lift shadows, mild white balance — keep photo/guilloche
-    const radius = Math.max(12, Math.round(Math.min(width, height) * 0.06));
-    boxBlur(img, blur, tmp, width, height, radius);
-    documentFlatten(img, blur, Math.min(0.58, Math.max(strength * 0.7, 0.32)));
-    whiteBalancePaper(img.data, 0.4);
-    contrastStretch(img.data, 2, 98.5);
-    midtoneContrast(img.data, 0.12 + strength * 0.15);
-  }
+  // 1) Flatten uneven lighting (scanner-like flat light)
+  const radius = Math.max(18, Math.round(Math.min(width, height) * 0.09));
+  boxBlur(img, blur, tmp, width, height, radius);
+  documentFlatten(img, blur, 0.72, paperMask);
 
-  if (enhance) {
-    const radius = Math.max(1, Math.round(1 + strength));
-    boxBlur(img, blur, tmp, width, height, radius);
-    unsharpMask(img, blur, 0.45 + strength * 0.55);
-    if (!docMode) {
-      contrastStretch(img.data, 1, 99.2);
-      midtoneContrast(img.data, 0.35 + strength * 0.4);
-    } else {
-      boxBlur(img, blur, tmp, width, height, 1);
-      unsharpMask(img, blur, 0.22 + strength * 0.2);
-    }
-  }
+  // 2) Paper white + ink clean
+  applyScanLook(img.data, paperMask);
+
+  // 3) Mild global stretch (not crushing)
+  contrastStretch(img.data, 1.5, 99);
+  midtoneContrast(img.data, 0.28, paperMask);
+
+  // 4) Sharpen text/edges; protect portrait (low paper mask)
+  boxBlur(img, blur, tmp, width, height, 1);
+  unsharpMask(img, blur, 0.95, paperMask);
+  boxBlur(img, blur, tmp, width, height, 1);
+  unsharpMask(img, blur, 0.4, paperMask);
 
   ctx.putImageData(img, 0, 0);
   return canvas;
 }
 
-/** Neutralize warm desk cast toward paper white. */
-function whiteBalancePaper(data, amount = 0.55) {
-  let rs = 0;
-  let gs = 0;
-  let bs = 0;
-  let n = 0;
-  for (let i = 0; i < data.length; i += 16) {
-    const r = data[i];
-    const g = data[i + 1];
-    const b = data[i + 2];
-    const lum = luminance(r, g, b);
-    if (lum < 150 || lum > 245) continue;
-    rs += r;
-    gs += g;
-    bs += b;
-    n++;
-  }
-  if (n < 32) return;
-  const mr = rs / n;
-  const mg = gs / n;
-  const mb = bs / n;
-  const target = (mr + mg + mb) / 3;
-  const kr = 1 + (target / Math.max(mr, 1) - 1) * amount;
-  const kg = 1 + (target / Math.max(mg, 1) - 1) * amount;
-  const kb = 1 + (target / Math.max(mb, 1) - 1) * amount;
-  for (let i = 0; i < data.length; i += 4) {
-    if (data[i + 3] < 8) continue;
-    data[i] = clamp(data[i] * kr);
-    data[i + 1] = clamp(data[i + 1] * kg);
-    data[i + 2] = clamp(data[i + 2] * kb);
-  }
+/** @deprecated alias — use toScanDocument */
+export function scanEnhance(source) {
+  return toScanDocument(source);
 }
 
-/** Local contrast (text punch) using blurred luminance as baseline. */
-function localContrast(img, blurOut, tmp, width, height, amount) {
-  const radius = Math.max(4, Math.round(Math.min(width, height) * 0.012));
-  boxBlur(img, blurOut, tmp, width, height, radius);
-  const s = img.data;
-  const b = blurOut.data;
-  const a = amount;
-  for (let i = 0; i < s.length; i += 4) {
-    if (s[i + 3] < 8) continue;
-    for (let c = 0; c < 3; c++) {
-      const v = s[i + c];
-      const m = b[i + c];
-      s[i + c] = clamp(m + (v - m) * (1 + a));
-    }
-  }
-}
+/**
+ * Live preview filters (optional toggles on stage).
+ * @param {CanvasImageSource} source
+ * @param {{ enhance?: boolean, docMode?: boolean, strength?: number }} options
+ */
+export function processImage(source, options = {}) {
+  const enhance = !!options.enhance;
+  const docMode = !!options.docMode;
+  if (docMode) return toScanDocument(source);
 
-/** Slightly darken near-black ink without crushing photo areas. */
-function inkBoost(data, amount) {
-  for (let i = 0; i < data.length; i += 4) {
-    if (data[i + 3] < 8) continue;
-    const lum = luminance(data[i], data[i + 1], data[i + 2]);
-    if (lum > 95) continue;
-    const t = (1 - lum / 95) * amount;
-    data[i] = clamp(data[i] * (1 - t));
-    data[i + 1] = clamp(data[i + 1] * (1 - t));
-    data[i + 2] = clamp(data[i + 2] * (1 - t));
-  }
+  const strength = Math.min(1, Math.max(0, (options.strength ?? 60) / 100));
+  const width = source.naturalWidth || source.width;
+  const height = source.naturalHeight || source.height;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(source, 0, 0);
+  if (!enhance) return canvas;
+
+  let img = ctx.getImageData(0, 0, width, height);
+  const tmp = copyImageData(img);
+  const blur = copyImageData(img);
+  const radius = Math.max(1, Math.round(1 + strength * 1.2));
+  boxBlur(img, blur, tmp, width, height, radius);
+  unsharpMask(img, blur, 0.6 + strength * 0.8, null);
+  contrastStretch(img.data, 1, 99.2);
+  midtoneContrast(img.data, 0.3 + strength * 0.35, null);
+  ctx.putImageData(img, 0, 0);
+  return canvas;
 }

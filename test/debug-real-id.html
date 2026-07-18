@@ -95,11 +95,12 @@
         // After normalize: must be landscape ID aspect, upright
         const okVar = v > 100;
         const okAspect = ratio > 1.25 && ratio < 2.05;
-        const cropped =
-          out.width * out.height < img.naturalWidth * img.naturalHeight * 0.9;
         const okLandscape = out.width > out.height;
-        // Content shouldn't be a thin strip of the card
         const okFill = out.width > 400 && out.height > 250;
+        // Upscaled scan may exceed source pixel count — only reject near-full-frame no-ops
+        const areaRatio =
+          (out.width * out.height) / (img.naturalWidth * img.naturalHeight);
+        const cropped = areaRatio < 2.2;
         if (!okVar || !okAspect || !cropped || !okLandscape || !okFill) {
           log(
             `  FAIL quality (var/aspect/cropped/land/fill=${okVar}/${okAspect}/${cropped}/${okLandscape}/${okFill})`

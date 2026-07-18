@@ -11,8 +11,8 @@
     <div class="app">
       <header class="header">
         <div class="brand">
-          <h1>身份证 A4</h1>
-          <p>上传正反面 → 自动扫描裁切增强 → 导出 PDF</p>
+          <h1>身份证 A4 扫描件</h1>
+          <p>上传照片 → 自动变成扫描件 → 排版导出 PDF</p>
         </div>
         <div class="header-actions">
           <button type="button" id="btnReset" class="btn ghost">重置</button>
@@ -36,15 +36,15 @@
         </section>
 
         <section class="panel">
-          <h2>裁切排版</h2>
+          <h2>扫描排版</h2>
           <button type="button" id="btnRemoveBg" class="btn primary block" disabled>
-            裁切选中到槽位
+            生成选中扫描件
           </button>
           <button type="button" id="btnCropAll" class="btn block">
-            一键扫描裁切并排版
+            一键生成扫描件并排版
           </button>
           <p class="hint">
-            上传后自动按边缘裁切、拉平透视、扫描增强（提亮去阴影+锐化），填入正反面
+            按边缘裁切拉平，做成复印店/扫描王风格的彩色扫描件（白底、去阴影、文字清晰），填入正反面
           </p>
           <button type="button" id="btnFit" class="btn block" style="margin-top: 8px">
             重新填入正反面

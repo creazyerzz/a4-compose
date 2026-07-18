@@ -1007,7 +1007,7 @@ export function scanDocument(source, opts = {}) {
     // Still try perspective — warpLooksSane will reject smear
     method = "perspective-relaxed";
   } else {
-    ordered = orderCorners(shrinkQuad([tl0, tr0, br0, bl0], 0.04));
+    ordered = orderCorners(shrinkQuad([tl0, tr0, br0, bl0], 0.06));
   }
   const [tl, tr, br, bl] = ordered;
   const widthA = Math.hypot(tr.x - tl.x, tr.y - tl.y);
@@ -1064,7 +1064,7 @@ export function scanDocument(source, opts = {}) {
         const bq = orderCorners(
             shrinkQuad(
             blobQ.map((p) => ({ x: p.x / scale, y: p.y / scale })),
-            0.065
+            0.09
           )
         );
         let bw = Math.round(
@@ -1116,7 +1116,8 @@ export function scanDocument(source, opts = {}) {
     return out;
   }
 
-  // Perspective already inset via shrinkQuad — skip aggressive fringe trim
+  // Perspective may still leave a hairline of desk — light fringe trim
+  out = trimDeskFringe(out);
   out = normalizeIdOrientation(out);
   out.__bgMeta = {
     ...(out.__bgMeta || {}),

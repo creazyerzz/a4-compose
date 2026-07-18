@@ -678,7 +678,7 @@ export class A4Stage {
       ctx.font = "15px sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText("上传正反面后自动扫描裁切并增强", pageW / 2, pageH / 2);
+      ctx.fillText("上传正反面照片，自动生成扫描件", pageW / 2, pageH / 2);
       return;
     }
 
