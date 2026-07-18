@@ -235,27 +235,25 @@ export function processImage(source, options = {}) {
   const blur = copyImageData(img);
 
   if (docMode) {
-    // Large blur estimates paper shading (CamScanner document mode)
-    const radius = Math.max(14, Math.round(Math.min(width, height) * 0.07));
+    // Soft CamScanner-like: lift shadows, mild white balance — keep photo/guilloche
+    const radius = Math.max(12, Math.round(Math.min(width, height) * 0.06));
     boxBlur(img, blur, tmp, width, height, radius);
-    documentFlatten(img, blur, Math.min(0.72, Math.max(strength * 0.85, 0.4)));
-    whiteBalancePaper(img.data, 0.55);
-    contrastStretch(img.data, 1.5, 99.1);
-    midtoneContrast(img.data, 0.18 + strength * 0.22);
-    localContrast(img, blur, tmp, width, height, 0.18 + strength * 0.15);
+    documentFlatten(img, blur, Math.min(0.58, Math.max(strength * 0.7, 0.32)));
+    whiteBalancePaper(img.data, 0.4);
+    contrastStretch(img.data, 2, 98.5);
+    midtoneContrast(img.data, 0.12 + strength * 0.15);
   }
 
   if (enhance) {
-    const radius = Math.max(1, Math.round(1 + strength * 1.2));
+    const radius = Math.max(1, Math.round(1 + strength));
     boxBlur(img, blur, tmp, width, height, radius);
-    unsharpMask(img, blur, 0.7 + strength * 0.9);
+    unsharpMask(img, blur, 0.45 + strength * 0.55);
     if (!docMode) {
       contrastStretch(img.data, 1, 99.2);
       midtoneContrast(img.data, 0.35 + strength * 0.4);
     } else {
       boxBlur(img, blur, tmp, width, height, 1);
-      unsharpMask(img, blur, 0.35 + strength * 0.35);
-      inkBoost(img.data, 0.06 + strength * 0.06);
+      unsharpMask(img, blur, 0.22 + strength * 0.2);
     }
   }
 
