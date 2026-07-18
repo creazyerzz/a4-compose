@@ -139,8 +139,8 @@ function unsharpMask(src, blurred, amount) {
 function documentFlatten(src, bg, strength) {
   const s = src.data;
   const g = bg.data;
-  const lift = 0.45 + strength * 0.35;
-  const whitePush = 225 - strength * 25;
+  const lift = 0.42 + strength * 0.32;
+  const whitePush = 218 - strength * 12;
   for (let i = 0; i < s.length; i += 4) {
     if (s[i + 3] < 8) continue;
     if (s[i] > 250 && s[i + 1] > 250 && s[i + 2] > 250) continue;
@@ -151,14 +151,16 @@ function documentFlatten(src, bg, strength) {
     let gc = (s[i + 1] / bgc) * 255;
     let b = (s[i + 2] / bb) * 255;
     const lum = luminance(s[i], s[i + 1], s[i + 2]);
-    const shadowBoost = lum < 120 ? (1 - lum / 120) * 0.28 * strength : 0;
-    const mix = Math.min(0.92, lift + shadowBoost);
+    // Protect dark photo / ink regions from over-bleach
+    const protect = lum < 85 ? 0.35 : lum < 120 ? 0.15 : 0;
+    const shadowBoost = lum < 140 ? (1 - lum / 140) * 0.22 * strength : 0;
+    const mix = Math.min(0.85, lift + shadowBoost) * (1 - protect);
     r = s[i] * (1 - mix) + r * mix;
     gc = s[i + 1] * (1 - mix) + gc * mix;
     b = s[i + 2] * (1 - mix) + b * mix;
     const outLum = luminance(r, gc, b);
-    if (outLum > whitePush) {
-      const t = Math.min(0.85, (outLum - whitePush) / (255 - whitePush));
+    if (outLum > whitePush && lum > 100) {
+      const t = Math.min(0.7, (outLum - whitePush) / (255 - whitePush));
       r = r + (255 - r) * t;
       gc = gc + (255 - gc) * t;
       b = b + (255 - b) * t;
@@ -183,11 +185,30 @@ function midtoneContrast(data, amount) {
 }
 
 /**
- * CamScanner-style: detect document corners → perspective warp → clean rectangle.
+ * CamScanner-style: detect document corners → perspective warp → scan enhance.
  * Keeps interior pixels intact (no color flood-fill eating patterns).
  */
 export function removeBackground(source, opts = {}) {
-  return scanDocument(source, opts);
+  let out = scanDocument(source, opts);
+  if (opts.enhance === false) return out;
+  const meta = out.__bgMeta || {};
+  out = scanEnhance(out, opts.scanStrength ?? 0.58);
+  out.__bgMeta = { ...meta, scanEnhanced: true };
+  return out;
+}
+
+/**
+ * Photocopy / 全能扫描王 style: flatten shadows, whiten paper, punch text.
+ * @param {CanvasImageSource} source
+ * @param {number} [strength] 0–1
+ */
+export function scanEnhance(source, strength = 0.58) {
+  const s = Math.min(1, Math.max(0.3, strength));
+  return processImage(source, {
+    enhance: true,
+    docMode: true,
+    strength: Math.round(42 + s * 28),
+  });
 }
 
 /**
@@ -214,26 +235,93 @@ export function processImage(source, options = {}) {
   const blur = copyImageData(img);
 
   if (docMode) {
-    const radius = Math.max(12, Math.round(Math.min(width, height) * 0.06));
+    // Large blur estimates paper shading (CamScanner document mode)
+    const radius = Math.max(14, Math.round(Math.min(width, height) * 0.07));
     boxBlur(img, blur, tmp, width, height, radius);
-    documentFlatten(img, blur, Math.min(0.85, Math.max(strength, 0.4)));
-    contrastStretch(img.data, 1.2, 99);
-    midtoneContrast(img.data, 0.25 + strength * 0.3);
+    documentFlatten(img, blur, Math.min(0.72, Math.max(strength * 0.85, 0.4)));
+    whiteBalancePaper(img.data, 0.55);
+    contrastStretch(img.data, 1.5, 99.1);
+    midtoneContrast(img.data, 0.18 + strength * 0.22);
+    localContrast(img, blur, tmp, width, height, 0.18 + strength * 0.15);
   }
 
   if (enhance) {
-    const radius = Math.max(1, Math.round(1 + strength * 1.5));
+    const radius = Math.max(1, Math.round(1 + strength * 1.2));
     boxBlur(img, blur, tmp, width, height, radius);
-    unsharpMask(img, blur, 0.9 + strength * 1.4);
+    unsharpMask(img, blur, 0.7 + strength * 0.9);
     if (!docMode) {
       contrastStretch(img.data, 1, 99.2);
       midtoneContrast(img.data, 0.35 + strength * 0.4);
     } else {
       boxBlur(img, blur, tmp, width, height, 1);
-      unsharpMask(img, blur, 0.55 + strength * 0.45);
+      unsharpMask(img, blur, 0.35 + strength * 0.35);
+      inkBoost(img.data, 0.06 + strength * 0.06);
     }
   }
 
   ctx.putImageData(img, 0, 0);
   return canvas;
+}
+
+/** Neutralize warm desk cast toward paper white. */
+function whiteBalancePaper(data, amount = 0.55) {
+  let rs = 0;
+  let gs = 0;
+  let bs = 0;
+  let n = 0;
+  for (let i = 0; i < data.length; i += 16) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    const lum = luminance(r, g, b);
+    if (lum < 150 || lum > 245) continue;
+    rs += r;
+    gs += g;
+    bs += b;
+    n++;
+  }
+  if (n < 32) return;
+  const mr = rs / n;
+  const mg = gs / n;
+  const mb = bs / n;
+  const target = (mr + mg + mb) / 3;
+  const kr = 1 + (target / Math.max(mr, 1) - 1) * amount;
+  const kg = 1 + (target / Math.max(mg, 1) - 1) * amount;
+  const kb = 1 + (target / Math.max(mb, 1) - 1) * amount;
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] < 8) continue;
+    data[i] = clamp(data[i] * kr);
+    data[i + 1] = clamp(data[i + 1] * kg);
+    data[i + 2] = clamp(data[i + 2] * kb);
+  }
+}
+
+/** Local contrast (text punch) using blurred luminance as baseline. */
+function localContrast(img, blurOut, tmp, width, height, amount) {
+  const radius = Math.max(4, Math.round(Math.min(width, height) * 0.012));
+  boxBlur(img, blurOut, tmp, width, height, radius);
+  const s = img.data;
+  const b = blurOut.data;
+  const a = amount;
+  for (let i = 0; i < s.length; i += 4) {
+    if (s[i + 3] < 8) continue;
+    for (let c = 0; c < 3; c++) {
+      const v = s[i + c];
+      const m = b[i + c];
+      s[i + c] = clamp(m + (v - m) * (1 + a));
+    }
+  }
+}
+
+/** Slightly darken near-black ink without crushing photo areas. */
+function inkBoost(data, amount) {
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] < 8) continue;
+    const lum = luminance(data[i], data[i + 1], data[i + 2]);
+    if (lum > 95) continue;
+    const t = (1 - lum / 95) * amount;
+    data[i] = clamp(data[i] * (1 - t));
+    data[i + 1] = clamp(data[i + 1] * (1 - t));
+    data[i + 2] = clamp(data[i + 2] * (1 - t));
+  }
 }

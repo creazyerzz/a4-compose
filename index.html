@@ -12,7 +12,7 @@
       <header class="header">
         <div class="brand">
           <h1>身份证 A4</h1>
-          <p>上传正反面 → 按边缘裁切 → 填入槽位 → 导出 PDF</p>
+          <p>上传正反面 → 自动扫描裁切增强 → 导出 PDF</p>
         </div>
         <div class="header-actions">
           <button type="button" id="btnReset" class="btn ghost">重置</button>
@@ -41,10 +41,10 @@
             裁切选中到槽位
           </button>
           <button type="button" id="btnCropAll" class="btn block">
-            一键裁切全部并排版
+            一键扫描裁切并排版
           </button>
           <p class="hint">
-            按身份证边缘裁切，自动转为横版并填入「正面 / 反面」槽位
+            上传后自动按边缘裁切、拉平透视、扫描增强（提亮去阴影+锐化），填入正反面
           </p>
           <button type="button" id="btnFit" class="btn block" style="margin-top: 8px">
             重新填入正反面
@@ -57,8 +57,8 @@
             <span>清晰度</span>
             <select id="optDpi">
               <option value="150">150 DPI</option>
-              <option value="200" selected>200 DPI（推荐）</option>
-              <option value="300">300 DPI</option>
+              <option value="200">200 DPI</option>
+              <option value="300" selected>300 DPI（更清晰）</option>
             </select>
           </label>
         </section>
@@ -77,7 +77,7 @@
           <span id="itemCount">0 张图片</span>
         </div>
         <div class="stage-scroll" id="stageScroll">
-          <canvas id="stage" width="794" height="1123" aria-label="身份证 A4 画布"></canvas>
+          <canvas id="stage" width="1191" height="1685" aria-label="身份证 A4 画布"></canvas>
         </div>
       </main>
     </div>

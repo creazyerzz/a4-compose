@@ -74,7 +74,12 @@ async function addFiles(fileList) {
       stage.removeSelected();
     }
     stage.autoLayout();
-    toast(`已添加，共 ${stage.items.length} 张（正面 / 反面）`);
+    syncChrome();
+    toast("正在智能扫描裁切…");
+    await new Promise((r) => setTimeout(r, 40));
+    const result = stage.cropAllToSlots();
+    if (!result.ok) toast(result.message || "裁切失败，可点「一键裁切」重试");
+    else toast(`已扫描增强 ${result.done} 张（正反面）`);
     syncChrome();
   } catch {
     toast("图片读取失败");
@@ -137,9 +142,9 @@ document.getElementById("btnCropAll").addEventListener("click", () => {
   setTimeout(() => {
     const result = stage.cropAllToSlots();
     if (!result.ok) toast(result.message);
-    else toast(`已裁切 ${result.done} 张并排入正反面`);
+    else toast(`已扫描增强 ${result.done} 张并排入正反面`);
     btn.disabled = false;
-    btn.textContent = "一键裁切全部并排版";
+    btn.textContent = "一键扫描裁切并排版";
     syncChrome();
   }, 40);
 });
@@ -181,7 +186,7 @@ document.getElementById("btnExport").addEventListener("click", async () => {
       page.toBlob(
         (b) => (b ? resolve(b) : reject(new Error("编码失败"))),
         "image/jpeg",
-        0.92
+        0.95
       );
     });
     const pdf = await jpegToA4Pdf(jpegBlob, page.width, page.height);

@@ -2,7 +2,7 @@
  * ID-card photocopy canvas only (A4 + front/back slots).
  */
 
-export const PREVIEW_DPI = 96;
+export const PREVIEW_DPI = 144;
 
 export function mmToPx(mm, dpi = PREVIEW_DPI) {
   return (mm / 25.4) * dpi;

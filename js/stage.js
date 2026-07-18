@@ -612,6 +612,8 @@ export class A4Stage {
     const cx = it.x + it.w / 2;
     const cy = it.y + it.h / 2;
     ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
     ctx.translate(cx, cy);
     ctx.rotate((it.rotation * Math.PI) / 180);
     ctx.drawImage(src, -it.w / 2, -it.h / 2, it.w, it.h);
@@ -676,7 +678,7 @@ export class A4Stage {
       ctx.font = "15px sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText("上传身份证正反面，裁切后自动填入上方槽位", pageW / 2, pageH / 2);
+      ctx.fillText("上传正反面后自动扫描裁切并增强", pageW / 2, pageH / 2);
       return;
     }
 
@@ -696,6 +698,8 @@ export class A4Stage {
     out.width = Math.round(this.pageW * scale);
     out.height = Math.round(this.pageH * scale);
     const ctx = out.getContext("2d");
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, out.width, out.height);
 
